@@ -1040,3 +1040,91 @@ body {
   font-size: 16px;
   margin: 0;
 }
+
+.admin-card {
+  display: grid;
+  gap: 18px;
+  margin-bottom: 18px;
+}
+
+.section-title h3 {
+  color: #ffffff;
+  font-size: 28px;
+  margin: 0 0 8px;
+}
+
+.section-title p {
+  color: #cfe0f6;
+  margin: 0;
+}
+
+.admin-form {
+  align-items: end;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 1.5fr 180px auto;
+}
+
+.admin-form label {
+  color: #ffffff;
+  display: grid;
+  font-weight: 800;
+  gap: 8px;
+}
+
+.admin-form input {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 14px;
+  color: #ffffff;
+  font: inherit;
+  padding: 14px 16px;
+}
+
+.admin-form input::placeholder {
+  color: rgba(248, 251, 255, 0.52);
+}
+
+.teacher-list {
+  display: grid;
+  gap: 12px;
+}
+
+.teacher-row {
+  align-items: center;
+}
+
+.teacher-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.status-pill {
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 900;
+  padding: 8px 12px;
+}
+
+.status-pill.active {
+  background: rgba(53, 208, 127, 0.18);
+  color: #7dffb8;
+}
+
+.status-pill.inactive {
+  background: rgba(255, 91, 108, 0.18);
+  color: #ff9aa5;
+}
+
+@media (max-width: 760px) {
+  .admin-form {
+    grid-template-columns: 1fr;
+  }
+
+  .teacher-actions {
+    justify-content: flex-start;
+  }
+}
