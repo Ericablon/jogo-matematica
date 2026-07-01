@@ -48,16 +48,11 @@ let state = {
 };
 
 function loadData() {
-  try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY)) || { students: {}, teachers: {} };
-  } catch {
-    return { students: {}, teachers: {} };
-  }
+  return { students: {}, teachers: {} };
 }
 
 function saveData() {
   data = normalizeData(data);
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
   scheduleCloudSave();
 }
 
@@ -152,7 +147,12 @@ function mergeCloudData(localData, cloudData) {
 }
 
 async function loadDataFromSupabase() {
-  if (!canUseSupabase()) return data;
+  data = { students: {}, teachers: {} };
+
+  if (!canUseSupabase()) {
+    console.error("Supabase não configurado. Confira o arquivo supabase-config.js.");
+    return data;
+  }
 
   try {
     const [{ data: studentsRows, error: studentsError }, { data: teachersRows, error: teachersError }] = await Promise.all([
@@ -187,8 +187,7 @@ async function loadDataFromSupabase() {
       };
     });
 
-    data = mergeCloudData(data, cloudData);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    data = cloudData;
     return data;
   } catch (error) {
     console.error("Erro ao carregar dados do Supabase:", error);
@@ -246,7 +245,11 @@ async function syncDataToSupabase() {
 }
 
 async function initApp() {
-  data = normalizeData(loadData());
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch {}
+
+  data = { students: {}, teachers: {} };
   await loadDataFromSupabase();
   render();
 }
@@ -737,10 +740,10 @@ function renderTeacherDashboard() {
   app.innerHTML = `
     <div class="app-container">
       ${renderTopBar()}
-      <header class="page-header"><div><h2>Painel do professor</h2><p>Desempenho dos alunos salvos neste navegador.</p></div><button class="btn btn-light" data-action="go-home">Voltar</button></header>
+      <header class="page-header"><div><h2>Painel do professor</h2><p>Desempenho dos alunos salvos no Supabase.</p></div><button class="btn btn-light" data-action="go-home">Voltar</button></header>
       <section class="stats-grid"><div class="stat-card"><strong>${students.length}</strong><span>Alunos</span></div><div class="stat-card"><strong>${totalCorrect}</strong><span>Acertos totais</span></div><div class="stat-card"><strong>${totalWrong}</strong><span>Erros totais</span></div><div class="stat-card"><strong>${totalAttempts}</strong><span>Tentativas</span></div><div class="stat-card"><strong>${totalFinished}</strong><span>Fases concluídas</span></div><div class="stat-card"><strong>${bestStudent ? bestStudent.student.fullName.split(" ")[0] : "-"}</strong><span>Maior destaque</span></div></section>
       <section class="card chart-card"><h3>Gráfico geral</h3><div class="bar-row"><span>Acertos</span><div><b style="width:${(totalCorrect / maxBar) * 100}%"></b></div><strong>${totalCorrect}</strong></div><div class="bar-row wrong"><span>Erros</span><div><b style="width:${(totalWrong / maxBar) * 100}%"></b></div><strong>${totalWrong}</strong></div></section>
-      <section class="list">${totals.length ? totals.map(({ student, stats }) => `<div class="list-item"><div><strong>${student.fullName}</strong><br /><small>${stats.completedLevels}/${stats.totalLevels} fases • média ${stats.averageCorrect} acertos e ${stats.averageWrong} erros</small></div><strong>${stats.correct} acertos</strong></div>`).join("") : `<div class="empty">Nenhum aluno jogou ainda neste navegador.</div>`}</section>
+      <section class="list">${totals.length ? totals.map(({ student, stats }) => `<div class="list-item"><div><strong>${student.fullName}</strong><br /><small>${stats.completedLevels}/${stats.totalLevels} fases • média ${stats.averageCorrect} acertos e ${stats.averageWrong} erros</small></div><strong>${stats.correct} acertos</strong></div>`).join("") : `<div class="empty">Nenhum aluno jogou ainda no Supabase.</div>`}</section>
     </div>
   `;
 }
@@ -820,7 +823,7 @@ function renderAdminTeacherManager() {
           `;
         }).join("") : `<div class="empty">Nenhum professor cadastrado ainda.</div>`}
       </div>
-      <p class="dashboard-note">Obs.: como este jogo e feito em HTML, CSS e JavaScript puro, os cadastros ficam salvos neste navegador.</p>
+      <p class="dashboard-note">Obs.: os cadastros de professores e o progresso dos alunos ficam salvos no Supabase.</p>
     </section>
   `;
 }
@@ -838,11 +841,11 @@ function renderTeacherDashboard() {
   app.innerHTML = `
     <div class="app-container">
       ${renderTopBar()}
-      <header class="page-header"><div><h2>${state.role === "admin" ? "Painel admin" : "Painel do professor"}</h2><p>Desempenho dos alunos salvos neste navegador.</p></div><button class="btn btn-light" data-action="go-home">Voltar</button></header>
+      <header class="page-header"><div><h2>${state.role === "admin" ? "Painel admin" : "Painel do professor"}</h2><p>Desempenho dos alunos salvos no Supabase.</p></div><button class="btn btn-light" data-action="go-home">Voltar</button></header>
       ${renderAdminTeacherManager()}
       <section class="stats-grid"><div class="stat-card"><strong>${students.length}</strong><span>Alunos</span></div><div class="stat-card"><strong>${totalCorrect}</strong><span>Acertos totais</span></div><div class="stat-card"><strong>${totalWrong}</strong><span>Erros totais</span></div><div class="stat-card"><strong>${totalAttempts}</strong><span>Tentativas</span></div><div class="stat-card"><strong>${totalFinished}</strong><span>Fases concluidas</span></div><div class="stat-card"><strong>${bestStudent ? escapeHtml(bestStudent.student.fullName.split(" ")[0]) : "-"}</strong><span>Maior destaque</span></div></section>
       <section class="card chart-card"><h3>Grafico geral</h3><div class="bar-row"><span>Acertos</span><div><b style="width:${(totalCorrect / maxBar) * 100}%"></b></div><strong>${totalCorrect}</strong></div><div class="bar-row wrong"><span>Erros</span><div><b style="width:${(totalWrong / maxBar) * 100}%"></b></div><strong>${totalWrong}</strong></div></section>
-      <section class="list">${totals.length ? totals.map(({ student, stats }) => `<div class="list-item"><div><strong>${escapeHtml(student.fullName)}</strong><br /><small>${stats.completedLevels}/${stats.totalLevels} fases - media ${stats.averageCorrect} acertos e ${stats.averageWrong} erros</small></div><strong>${stats.correct} acertos</strong></div>`).join("") : `<div class="empty">Nenhum aluno jogou ainda neste navegador.</div>`}</section>
+      <section class="list">${totals.length ? totals.map(({ student, stats }) => `<div class="list-item"><div><strong>${escapeHtml(student.fullName)}</strong><br /><small>${stats.completedLevels}/${stats.totalLevels} fases - media ${stats.averageCorrect} acertos e ${stats.averageWrong} erros</small></div><strong>${stats.correct} acertos</strong></div>`).join("") : `<div class="empty">Nenhum aluno jogou ainda no Supabase.</div>`}</section>
     </div>
   `;
 }
