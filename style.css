@@ -434,6 +434,87 @@ button {
   font-size: 14px;
 }
 
+.top-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.check-row {
+  align-items: center;
+  display: flex !important;
+  flex-direction: row;
+  gap: 10px;
+}
+
+.check-row input {
+  width: auto;
+}
+
+.teacher-birth {
+  display: none !important;
+}
+
+.teacher-birth.visible {
+  display: grid !important;
+}
+
+.difficulty-row {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(4, 1fr);
+  margin: 18px 0;
+}
+
+.difficulty-btn {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+  padding: 13px 10px;
+}
+
+.difficulty-btn.active {
+  background: linear-gradient(135deg, #f7c948, #f59f00);
+  color: #101827;
+}
+
+.chart-card {
+  margin: 18px 0;
+}
+
+.chart-card h3 {
+  margin: 0 0 16px;
+}
+
+.bar-row {
+  align-items: center;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 90px 1fr 60px;
+  margin: 12px 0;
+}
+
+.bar-row div {
+  background: rgba(255, 255, 255, 0.09);
+  border-radius: 999px;
+  height: 18px;
+  overflow: hidden;
+}
+
+.bar-row b {
+  background: linear-gradient(90deg, #35d07f, #f7c948);
+  display: block;
+  height: 100%;
+}
+
+.bar-row.wrong b {
+  background: linear-gradient(90deg, #ff5b6c, #d62839);
+}
+
 .complete-message {
   background: #dcfce7;
   border: 1px solid #86efac;
@@ -817,6 +898,14 @@ button {
   .player-option {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .difficulty-row {
+    grid-template-columns: 1fr;
+  }
+
+  .bar-row {
+    grid-template-columns: 1fr;
   }
 
   .world-grid,
