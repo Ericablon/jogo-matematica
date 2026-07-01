@@ -934,3 +934,95 @@ button {
     width: 100%;
   }
 }
+
+/* Ajustes finais globais: contraste escuro e alinhamento da marca. */
+body {
+  background:
+    radial-gradient(circle at top left, rgba(29, 111, 255, 0.28), transparent 34%),
+    radial-gradient(circle at top right, rgba(247, 201, 72, 0.13), transparent 28%),
+    linear-gradient(180deg, #07162d 0%, #050b16 100%) !important;
+  color: var(--text) !important;
+}
+
+.login-card,
+.hero,
+.card,
+.player-bar {
+  background: linear-gradient(180deg, rgba(13, 31, 61, 0.98), rgba(8, 20, 40, 0.98)) !important;
+  border-color: rgba(255, 255, 255, 0.14) !important;
+  color: var(--text) !important;
+}
+
+.login-brand {
+  flex-direction: column;
+  justify-content: center;
+  margin: 0 auto 22px;
+  text-align: center;
+}
+
+.login-brand span {
+  height: 64px;
+  width: 64px;
+}
+
+.login-brand b {
+  display: block;
+  font-size: 22px;
+}
+
+.login-card h1,
+.login-card p {
+  text-align: center;
+}
+
+.home-title {
+  font-size: clamp(34px, 5vw, 54px) !important;
+}
+
+.stat-card,
+.result-item,
+.list-item,
+.empty,
+.pill,
+.answer-btn,
+.player-option,
+.difficulty-btn {
+  background: rgba(255, 255, 255, 0.08) !important;
+  border-color: rgba(255, 255, 255, 0.14) !important;
+  color: var(--text) !important;
+}
+
+.stat-card strong,
+.result-item strong,
+.list-item strong,
+.pill,
+.answer-btn,
+.page-header h2,
+.hero h1,
+.login-card h1 {
+  color: #ffffff !important;
+}
+
+.stat-card span,
+.result-item span,
+.list-item small,
+.page-header p,
+.hero p,
+.login-card p,
+.player-bar span {
+  color: #cfe0f6 !important;
+}
+
+.difficulty-btn.active {
+  background: linear-gradient(135deg, #f7c948, #f59f00) !important;
+  color: #101827 !important;
+}
+
+.btn-light {
+  background: rgba(255, 255, 255, 0.92) !important;
+  color: #0646c8 !important;
+}
+
+.check-row {
+  color: #ffffff !important;
+}
