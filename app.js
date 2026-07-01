@@ -359,14 +359,13 @@ function renderLogin() {
   app.innerHTML = `
     <div class="app-container">
       <section class="card login-card">
-        <div class="brand-mark"><span>JM</span><b>Jogo de Matemática</b></div>
-        <div class="logo-badge">Azul, vermelho e dourado</div>
+        <div class="brand-mark login-brand"><span>JM</span><b>Jogo de Matemática</b></div>
         <h1>Jogo de Matemática</h1>
         <p>Login: informe seu nome completo. Se for professor, marque a opção e informe também a data de nascimento.</p>
         ${mascot("Aluno entra direto. Professor ganha uma tela extra para acompanhar todos os desempenhos.")}
         <form class="login-form" data-form="login">
           <label>Nome completo<input name="fullName" type="text" autocomplete="name" minlength="3" required placeholder="Ex: Maria Silva" /></label>
-          <label class="check-row"><input name="isTeacher" type="checkbox" data-action="toggle-teacher" /> Sou professor</label>
+          <label class="check-row"><input name="isTeacher" type="checkbox" data-action="toggle-teacher" ${state.loginMode === "teacher" ? "checked" : ""} /> Sou professor</label>
           <label class="teacher-birth ${state.loginMode === "teacher" ? "visible" : ""}">Data de nascimento do professor<input name="birthDate" type="date" /></label>
           ${state.loginError ? `<div class="feedback danger">${state.loginError}</div>` : ""}
           <button class="btn btn-primary" type="submit">Entrar</button>
@@ -406,7 +405,7 @@ function renderHome() {
       ${renderTopBar()}
       <section class="hero">
         <div class="logo-badge">Todas as fases liberadas</div>
-        <h1>Jogo de Matemática</h1>
+        <h1 class="home-title">Jogo de Matemática</h1>
         <p>Escolha a dificuldade, entre em qualquer fase e treine no seu ritmo.</p>
         ${renderDifficultyPicker()}
         ${mascot("Pode sair da fase quando quiser pelo botão Sair da fase.")}
@@ -586,6 +585,8 @@ app.addEventListener("click", (event) => {
   const element = event.target.closest("[data-action]");
   if (!element) return;
   const action = element.dataset.action;
+
+  if (action === "toggle-teacher") return;
 
   if (action === "go-home") state.screen = "home";
   if (action === "go-worlds") state.screen = "worlds";
