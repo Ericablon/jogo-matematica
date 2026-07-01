@@ -1,6 +1,6 @@
 const app = document.getElementById("app");
 
-const STORAGE_KEY = "matematica_em_fases_v2";
+const STORAGE_KEY = "matematica_em_fases_v3";
 const LEGACY_STORAGE_KEY = "matematica_em_fases_v1";
 const LEVELS_PER_WORLD = 10;
 
@@ -122,20 +122,19 @@ function normalizeText(value) {
     .replace(/^-+|-+$/g, "");
 }
 
-function createPlayerId(fullName, birthDate) {
-  return `${normalizeText(fullName)}_${birthDate}`;
+function createPlayerId(fullName) {
+  return normalizeText(fullName);
 }
 
-function createOrSelectPlayer(fullName, birthDate) {
+function createOrSelectPlayer(fullName) {
   const cleanName = fullName.trim().replace(/\s+/g, " ");
-  const playerId = createPlayerId(cleanName, birthDate);
+  const playerId = createPlayerId(cleanName);
   const legacyProgress = tryLoadLegacyProgress();
 
   if (!gameData.players[playerId]) {
     gameData.players[playerId] = {
       id: playerId,
       fullName: cleanName,
-      birthDate,
       progress: legacyProgress || createEmptyProgress(),
       createdAt: new Date().toISOString()
     };
@@ -185,10 +184,7 @@ function getLevelData(worldId, level) {
 }
 
 function isLevelUnlocked(worldId, level) {
-  if (level === 1) return true;
-
-  const previousLevel = getLevelData(worldId, level - 1);
-  return previousLevel && previousLevel.passed;
+  return true;
 }
 
 function getTotalStats(targetProgress = progress) {
@@ -449,11 +445,47 @@ function renderPlayerBar() {
     <div class="player-bar">
       <div>
         <strong>${player.fullName}</strong>
-        <span>Nascimento: ${formatDate(player.birthDate)}</span>
+        <span>Progresso salvo neste navegador</span>
       </div>
       <button class="btn btn-light" data-action="logout">Trocar jogador</button>
     </div>
   `;
+}
+
+function renderMascot(message, mood = "happy") {
+  return `
+    <div class="mascot-card ${mood}">
+      <div class="mascot" aria-hidden="true">
+        <span class="mascot-head"></span>
+        <span class="mascot-body"></span>
+        <span class="mascot-arm left"></span>
+        <span class="mascot-arm right"></span>
+      </div>
+      <p>${message}</p>
+    </div>
+  `;
+}
+
+function getHelperMessage(question) {
+  if (!question) return "Respire, observe a conta e escolha com calma.";
+
+  if (question.text.includes("+")) {
+    return "Dica: junte os dois grupos. Somar é colocar tudo no mesmo conjunto.";
+  }
+
+  if (question.text.includes("-")) {
+    return "Dica: comece pelo número maior e retire a quantidade menor.";
+  }
+
+  if (question.text.includes("×") || question.text.includes("Ã—")) {
+    return "Dica: multiplicar é somar o mesmo número várias vezes.";
+  }
+
+  if (question.text.includes("÷") || question.text.includes("Ã·")) {
+    return "Dica: dividir é repartir em partes iguais.";
+  }
+
+  return "Dica: leia o sinal primeiro, depois resolva passo a passo.";
 }
 
 function renderLogin() {
@@ -509,6 +541,60 @@ function renderLogin() {
   `;
 }
 
+function renderLogin() {
+  const players = Object.values(gameData.players);
+  const playerList = players.length
+    ? players
+        .map((player) => {
+          const stats = getTotalStats(player.progress);
+          return `
+            <button class="player-option" data-action="select-player" data-player="${player.id}">
+              <span>
+                <strong>${player.fullName}</strong>
+                <small>${stats.completedLevels}/${stats.totalLevels} fases concluídas</small>
+              </span>
+              <b>Entrar</b>
+            </button>
+          `;
+        })
+        .join("")
+    : `<div class="empty">Nenhum jogador cadastrado ainda.</div>`;
+
+  app.innerHTML = `
+    <div class="app-container">
+      <section class="card login-card">
+        <div class="brand-mark">
+          <span>UN</span>
+          <b>Matemática</b>
+        </div>
+        <div class="logo-badge">Inspirado nas cores da UNEB</div>
+        <h1>Matemática em Fases</h1>
+        <p>Digite seu nome completo para entrar e salvar seu progresso neste navegador.</p>
+
+        ${renderMascot("Olá! Eu vou te acompanhar nas contas. Vamos aprender sem pressa?", "welcome")}
+
+        <form class="login-form" data-form="player">
+          <label>
+            Nome completo
+            <input name="fullName" type="text" autocomplete="name" minlength="3" required placeholder="Ex: Maria Silva" />
+          </label>
+
+          ${state.loginError ? `<div class="feedback danger">${state.loginError}</div>` : ""}
+
+          <button class="btn btn-primary" type="submit">Entrar no jogo</button>
+        </form>
+      </section>
+
+      <section class="card login-card">
+        <h2>Jogadores salvos</h2>
+        <div class="player-list">
+          ${playerList}
+        </div>
+      </section>
+    </div>
+  `;
+}
+
 function renderHome() {
   const stats = getTotalStats();
 
@@ -525,6 +611,52 @@ function renderHome() {
         <p>
           Resolva desafios, ganhe estrelas, avance de fase e salve o progresso de cada jogador até zerar o jogo.
         </p>
+
+        <div class="actions">
+          <button class="btn btn-primary" data-action="go-worlds">Jogar agora</button>
+          ${continueButton}
+          <button class="btn btn-light" data-action="go-ranking">Meu desempenho</button>
+        </div>
+
+        <div class="stats-grid">
+          <div class="stat-card">
+            <strong>${stats.completedLevels}/${stats.totalLevels}</strong>
+            <span>Fases concluídas</span>
+          </div>
+
+          <div class="stat-card">
+            <strong>${stats.totalStars}</strong>
+            <span>Estrelas ganhas</span>
+          </div>
+
+          <div class="stat-card">
+            <strong>${stats.totalScore}</strong>
+            <span>Pontos totais</span>
+          </div>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function renderHome() {
+  const stats = getTotalStats();
+
+  const continueButton = progress.lastPlayed
+    ? `<button class="btn btn-secondary" data-action="continue">Continuar fase</button>`
+    : "";
+
+  app.innerHTML = `
+    <div class="app-container">
+      ${renderPlayerBar()}
+      <section class="hero">
+        <div class="logo-badge">${stats.isGameComplete ? "Jogo zerado!" : "Jogo educativo"}</div>
+        <h1>Matemática em Fases</h1>
+        <p>
+          Escolha qualquer fase, treine no seu ritmo e conte com o ajudante para resolver cada cálculo.
+        </p>
+
+        ${renderMascot("Todas as fases estão abertas. Você pode começar pela mais fácil ou ir direto para um desafio!", "hero-helper")}
 
         <div class="actions">
           <button class="btn btn-primary" data-action="go-worlds">Jogar agora</button>
@@ -628,6 +760,47 @@ function renderLevels() {
   `;
 }
 
+function renderLevels() {
+  const world = getWorldById(state.currentWorldId);
+
+  const levels = Array.from({ length: LEVELS_PER_WORLD }, (_, index) => {
+    const level = index + 1;
+    const data = getLevelData(world.id, level);
+    const stars = data ? renderStars(data.stars) : "☆ ☆ ☆";
+
+    return `
+      <article
+        class="card level-card"
+        data-action="start-level"
+        data-world="${world.id}"
+        data-level="${level}"
+      >
+        <div class="level-number">Fase ${level}</div>
+        <div class="stars">${stars}</div>
+        <small>${data?.passed ? "Concluída" : "Disponível"}</small>
+      </article>
+    `;
+  }).join("");
+
+  app.innerHTML = `
+    <div class="app-container">
+      ${renderPlayerBar()}
+      <header class="page-header">
+        <div>
+          <h2>${world.emoji} ${world.name}</h2>
+          <p>Todas as fases estão disponíveis. Escolha uma e pratique no seu ritmo.</p>
+        </div>
+
+        <button class="btn btn-light" data-action="go-worlds">Voltar</button>
+      </header>
+
+      <section class="grid level-grid">
+        ${levels}
+      </section>
+    </div>
+  `;
+}
+
 function renderGame() {
   const world = getWorldById(state.currentWorldId);
   const currentQuestion = state.questions[state.questionIndex];
@@ -681,6 +854,8 @@ function renderGame() {
             ${currentQuestion.text}
           </div>
         </div>
+
+        ${renderMascot(getHelperMessage(currentQuestion), "game-helper")}
 
         <div class="answers">
           ${answers}
@@ -837,15 +1012,14 @@ app.addEventListener("submit", (event) => {
 
   const formData = new FormData(form);
   const fullName = String(formData.get("fullName") || "").trim();
-  const birthDate = String(formData.get("birthDate") || "");
 
-  if (fullName.length < 3 || !birthDate) {
-    state.loginError = "Preencha o nome completo e a data de nascimento.";
+  if (fullName.length < 3) {
+    state.loginError = "Preencha o nome completo.";
     render();
     return;
   }
 
-  createOrSelectPlayer(fullName, birthDate);
+  createOrSelectPlayer(fullName);
   state.loginError = "";
   state.screen = "home";
   render();
