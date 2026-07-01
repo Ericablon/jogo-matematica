@@ -57,10 +57,15 @@ function saveData() {
 }
 
 
+function getSupabaseClient() {
+  return window.supabaseClient || window.cliente_supabase || window.sb || null;
+}
+
 function canUseSupabase() {
   return Boolean(
-    window.supabaseClient &&
-    window.SUPABASE_ANON_KEY !== "COLE_AQUI_SUA_CHAVE_PUBLICA_DO_SUPABASE"
+    getSupabaseClient() &&
+    window.SUPABASE_ANON_KEY &&
+    !String(window.SUPABASE_ANON_KEY).includes("COLE_AQUI")
   );
 }
 
@@ -154,10 +159,12 @@ async function loadDataFromSupabase() {
     return data;
   }
 
+  const client = getSupabaseClient();
+
   try {
     const [{ data: studentsRows, error: studentsError }, { data: teachersRows, error: teachersError }] = await Promise.all([
-      window.supabaseClient.from("math_students").select("id, full_name, progress, created_at, updated_at"),
-      window.supabaseClient.from("math_teachers").select("id, full_name, password, active, progress, created_at, updated_at")
+      client.from("math_students").select("id, full_name, progress, created_at, updated_at"),
+      client.from("math_teachers").select("id, full_name, password, active, progress, created_at, updated_at")
     ]);
 
     if (studentsError) throw studentsError;
@@ -205,7 +212,12 @@ function scheduleCloudSave() {
 }
 
 async function syncDataToSupabase() {
-  if (!canUseSupabase()) return;
+  if (!canUseSupabase()) {
+    console.error("Supabase não configurado. Progresso não foi salvo na nuvem.");
+    return;
+  }
+
+  const client = getSupabaseClient();
 
   try {
     const students = Object.values(data.students || {}).map((student) => ({
@@ -227,14 +239,14 @@ async function syncDataToSupabase() {
     }));
 
     if (students.length) {
-      const { error } = await window.supabaseClient
+      const { error } = await client
         .from("math_students")
         .upsert(students, { onConflict: "id" });
       if (error) throw error;
     }
 
     if (teachers.length) {
-      const { error } = await window.supabaseClient
+      const { error } = await client
         .from("math_teachers")
         .upsert(teachers, { onConflict: "id" });
       if (error) throw error;
@@ -861,53 +873,6 @@ function render() {
   if (state.screen === "teacher") renderTeacherDashboard();
 }
 
-app.addEventListener("submit", (event) => {
-  const form = event.target.closest("[data-form='login']");
-  if (!form) return;
-  event.preventDefault();
-  const formData = new FormData(form);
-  const fullName = String(formData.get("fullName") || "").trim().replace(/\s+/g, " ");
-  const isTeacher = formData.get("isTeacher") === "on";
-  const birthDate = String(formData.get("birthDate") || "");
-  const teacherPassword = String(formData.get("teacherPassword") || "");
-
-  if (fullName.length < 3) {
-    state.loginError = "Preencha o nome completo.";
-    render();
-    return;
-  }
-  if (isTeacher && !birthDate) {
-    state.loginMode = "teacher";
-    state.loginError = "Professor precisa informar a data de nascimento.";
-    render();
-    return;
-  }
-  if (isTeacher && slug(fullName) !== ADMIN_TEACHER_NAME) {
-    state.loginMode = "teacher";
-    state.loginError = "Apenas o administrador autorizado pode entrar como professor.";
-    render();
-    return;
-  }
-  if (isTeacher && teacherPassword !== ADMIN_TEACHER_PASSWORD) {
-    state.loginMode = "teacher";
-    state.loginError = "Senha do professor inválida.";
-    render();
-    return;
-  }
-
-  const id = isTeacher ? `${slug(fullName)}_${birthDate}` : slug(fullName);
-  const group = isTeacher ? data.teachers : data.students;
-  if (!group[id]) {
-    group[id] = { id, fullName, birthDate: isTeacher ? birthDate : null, progress: emptyProgress(), createdAt: new Date().toISOString() };
-  }
-  state.currentUserId = id;
-  state.role = isTeacher ? "teacher" : "student";
-  state.screen = "home";
-  state.loginError = "";
-  saveData();
-  render();
-});
-
 app.addEventListener("change", (event) => {
   if (event.target.matches("[data-action='toggle-teacher']")) {
     state.loginMode = event.target.checked ? "teacher" : "student";
@@ -944,13 +909,17 @@ app.addEventListener("click", (event) => {
   render();
 });
 
-app.addEventListener("submit", (event) => {
+app.addEventListener("submit", async (event) => {
   const loginForm = event.target.closest("[data-form='login']");
   const teacherForm = event.target.closest("[data-form='teacher-create']");
   if (!loginForm && !teacherForm) return;
 
   event.preventDefault();
   event.stopImmediatePropagation();
+
+  if (canUseSupabase()) {
+    await loadDataFromSupabase();
+  }
 
   if (teacherForm) {
     const formData = new FormData(teacherForm);
@@ -998,7 +967,8 @@ app.addEventListener("submit", (event) => {
     };
     state.adminMessageType = "success";
     state.adminMessage = "Professor cadastrado e ativo.";
-    saveData();
+    await syncDataToSupabase();
+    await loadDataFromSupabase();
     render();
     return;
   }
@@ -1066,10 +1036,11 @@ app.addEventListener("submit", (event) => {
   state.screen = "home";
   state.loginError = "";
   saveData();
+  await syncDataToSupabase();
   render();
 }, true);
 
-app.addEventListener("click", (event) => {
+app.addEventListener("click", async (event) => {
   const element = event.target.closest("[data-action='toggle-professor']");
   if (!element) return;
   event.preventDefault();
@@ -1089,7 +1060,8 @@ app.addEventListener("click", (event) => {
   teacher.updatedAt = new Date().toISOString();
   state.adminMessageType = "success";
   state.adminMessage = teacher.active ? "Professor ativado." : "Professor desativado.";
-  saveData();
+  await syncDataToSupabase();
+  await loadDataFromSupabase();
   render();
 }, true);
 
