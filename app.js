@@ -152,7 +152,7 @@ function mergeCloudData(localData, cloudData) {
 }
 
 async function loadDataFromSupabase() {
-  data = { students: {}, teachers: {} };
+  data = normalizeData(data);
 
   if (!canUseSupabase()) {
     console.error("Supabase não configurado. Confira o arquivo supabase-config.js.");
@@ -160,44 +160,49 @@ async function loadDataFromSupabase() {
   }
 
   const client = getSupabaseClient();
+  const cloudData = { students: {}, teachers: {} };
 
   try {
-    const [{ data: studentsRows, error: studentsError }, { data: teachersRows, error: teachersError }] = await Promise.all([
-      client.from("math_students").select("id, full_name, progress, created_at, updated_at"),
-      client.from("math_teachers").select("id, full_name, password, active, progress, created_at, updated_at")
-    ]);
+    const { data: studentsRows, error: studentsError } = await client
+      .from("math_students")
+      .select("id, full_name, progress, created_at, updated_at");
 
-    if (studentsError) throw studentsError;
-    if (teachersError) throw teachersError;
+    if (studentsError) {
+      console.error("Erro ao carregar alunos do Supabase:", studentsError);
+    } else {
+      (studentsRows || []).forEach((row) => {
+        cloudData.students[row.id] = {
+          id: row.id,
+          fullName: row.full_name,
+          progress: row.progress || emptyProgress(),
+          createdAt: row.created_at,
+          updatedAt: row.updated_at
+        };
+      });
+    }
 
-    const cloudData = { students: {}, teachers: {} };
+    const { data: teachersRows, error: teachersError } = await client
+      .from("math_teachers")
+      .select("id, full_name, password, active, progress, created_at, updated_at");
 
-    (studentsRows || []).forEach((row) => {
-      cloudData.students[row.id] = {
-        id: row.id,
-        fullName: row.full_name,
-        progress: row.progress || emptyProgress(),
-        createdAt: row.created_at,
-        updatedAt: row.updated_at
-      };
-    });
+    if (teachersError) {
+      console.error("Erro ao carregar professores do Supabase:", teachersError);
+      window.ultimoErroProfessores = teachersError;
+    } else {
+      window.ultimoErroProfessores = null;
+      (teachersRows || []).forEach((row) => {
+        cloudData.teachers[row.id] = rowToTeacher(row);
+      });
+    }
 
-    (teachersRows || []).forEach((row) => {
-      cloudData.teachers[row.id] = {
-        id: row.id,
-        fullName: row.full_name,
-        password: row.password,
-        active: row.active !== false,
-        progress: row.progress || emptyProgress(),
-        createdAt: row.created_at,
-        updatedAt: row.updated_at
-      };
-    });
+    window.professoresCarregadosSupabase = Object.keys(cloudData.teachers || {}).length;
+    console.log("Professores carregados do Supabase:", window.professoresCarregadosSupabase, Object.values(cloudData.teachers || {}).map((item) => item.fullName));
 
-    data = cloudData;
+    data = mergeCloudData(data, cloudData);
     return data;
   } catch (error) {
-    console.error("Erro ao carregar dados do Supabase:", error);
+    console.error("Erro geral ao carregar dados do Supabase:", error);
+    window.ultimoErroProfessores = error;
     return data;
   }
 }
@@ -907,6 +912,10 @@ function renderAdminTeacherManager() {
         <button class="btn btn-primary" type="submit">Cadastrar professor</button>
       </form>
       ${state.adminMessage ? `<div class="feedback ${state.adminMessageType === "danger" ? "danger" : "success"}">${state.adminMessage}</div>` : ""}
+      <div class="actions" style="margin: 12px 0 18px;">
+        <button class="btn btn-light" data-action="reload-teachers">Recarregar professores do Supabase</button>
+        <span class="dashboard-note">Carregados: ${teachers.length}</span>
+      </div>
       <div class="teacher-list">
         ${teachers.length ? teachers.map((teacher) => {
           const active = teacher.active !== false;
@@ -982,6 +991,10 @@ app.addEventListener("click", (event) => {
   if (action === "go-ranking") state.screen = "ranking";
   if (action === "teacher-dashboard") state.screen = "teacher";
   if (action === "logout") state = { ...state, screen: "login", currentUserId: null, role: null, loginMode: "student", loginName: "", loginError: "", adminMessage: "" };
+  if (action === "reload-teachers") {
+    loadDataFromSupabase().then(() => render());
+    return;
+  }
   if (action === "set-difficulty") state.difficulty = element.dataset.difficulty;
   if (action === "select-world") {
     state.currentWorldId = element.dataset.world;
