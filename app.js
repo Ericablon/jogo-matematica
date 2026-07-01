@@ -276,6 +276,95 @@ function slug(value) {
     .replace(/^-+|-+$/g, "");
 }
 
+function normalizeText(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function normalizePin(value) {
+  return String(value || "").replace(/\D/g, "").slice(0, 4);
+}
+
+function rowToTeacher(row) {
+  return {
+    id: row.id,
+    fullName: row.full_name,
+    password: row.password,
+    active: row.active !== false,
+    progress: row.progress || emptyProgress(),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function findTeacherByNameLocal(fullName) {
+  const wantedSlug = slug(fullName || "");
+  const wantedName = normalizeText(fullName || "");
+
+  return Object.values(data.teachers || {}).find((teacher) => {
+    const teacherId = String(teacher?.id || "");
+    const teacherSlug = slug(teacher?.fullName || "");
+    const teacherName = normalizeText(teacher?.fullName || "");
+
+    return (
+      teacherId === wantedSlug ||
+      teacherId.startsWith(`${wantedSlug}_`) ||
+      teacherSlug === wantedSlug ||
+      teacherName === wantedName
+    );
+  }) || null;
+}
+
+async function buscarProfessorPorNomeNoSupabase(fullName) {
+  if (canUseSupabase()) {
+    await loadDataFromSupabase();
+  }
+
+  let teacher = findTeacherByNameLocal(fullName);
+  if (teacher) return teacher;
+
+  const client = getSupabaseClient();
+  if (!client) {
+    console.error("Cliente Supabase nao encontrado.");
+    return null;
+  }
+
+  const wantedSlug = slug(fullName || "");
+  const wantedName = normalizeText(fullName || "");
+
+  const { data: rows, error } = await client
+    .from("math_teachers")
+    .select("id, full_name, password, active, progress, created_at, updated_at");
+
+  if (error) {
+    console.error("Erro ao buscar professores no Supabase:", error);
+    return null;
+  }
+
+  (rows || []).forEach((row) => {
+    data.teachers[row.id] = rowToTeacher(row);
+  });
+
+  teacher = Object.values(data.teachers || {}).find((item) => {
+    const itemId = String(item?.id || "");
+    const itemSlug = slug(item?.fullName || "");
+    const itemName = normalizeText(item?.fullName || "");
+
+    return (
+      itemId === wantedSlug ||
+      itemId.startsWith(`${wantedSlug}_`) ||
+      itemSlug === wantedSlug ||
+      itemName === wantedName
+    );
+  });
+
+  return teacher || null;
+}
+
 function escapeHtml(value) {
   return String(value)
     .replace(/&/g, "&amp;")
@@ -924,7 +1013,7 @@ app.addEventListener("submit", async (event) => {
   if (teacherForm) {
     const formData = new FormData(teacherForm);
     const teacherName = String(formData.get("teacherName") || "").trim().replace(/\s+/g, " ");
-    const teacherPin = String(formData.get("teacherPin") || "");
+    const teacherPin = normalizePin(formData.get("teacherPin"));
     const id = slug(teacherName);
 
     if (state.role !== "admin") {
@@ -987,43 +1076,66 @@ app.addEventListener("submit", async (event) => {
 
   if (isTeacher) {
     state.loginMode = "teacher";
-    if (!validPin(teacherPassword)) {
+
+    const cleanTeacherPassword = normalizePin(teacherPassword);
+
+    if (!validPin(cleanTeacherPassword)) {
       state.loginError = "Informe a senha de 4 digitos.";
       render();
       return;
     }
 
-    if (isAdminLogin(fullName, teacherPassword)) {
+    if (isAdminLogin(fullName, cleanTeacherPassword)) {
       state.currentUserId = ADMIN_TEACHER_NAME;
       state.role = "admin";
       state.screen = "teacher";
       state.loginError = "";
       state.adminMessage = "";
+
+      if (canUseSupabase()) {
+        await loadDataFromSupabase();
+      }
+
       render();
       return;
     }
 
-    const teacher = data.teachers[id];
+    const teacher = await buscarProfessorPorNomeNoSupabase(fullName);
+
     if (!teacher) {
-      state.loginError = "Professor nao cadastrado pelo admin.";
+      console.warn(
+        "Professor nao encontrado. Professores carregados:",
+        Object.values(data.teachers || {}).map((item) => ({
+          id: item.id,
+          fullName: item.fullName,
+          active: item.active,
+          password: item.password ? "PREENCHIDA" : "VAZIA"
+        }))
+      );
+
+      state.loginError = "Professor nao cadastrado pelo admin. Confira o nome completo exatamente como foi cadastrado.";
       render();
       return;
     }
+
     if (teacher.active === false) {
       state.loginError = "Professor desativado. Fale com o admin.";
       render();
       return;
     }
-    if (teacher.password !== teacherPassword) {
+
+    if (normalizePin(teacher.password) !== cleanTeacherPassword) {
       state.loginError = "Senha do professor invalida.";
       render();
       return;
     }
 
-    state.currentUserId = id;
+    state.currentUserId = teacher.id;
     state.role = "teacher";
     state.screen = "teacher";
     state.loginError = "";
+    state.adminMessage = "";
+
     render();
     return;
   }
