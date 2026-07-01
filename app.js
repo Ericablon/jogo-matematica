@@ -3,6 +3,8 @@ const app = document.getElementById("app");
 const STORAGE_KEY = "matematica_em_fases_v4";
 const LEVELS_PER_WORLD = 10;
 const QUESTIONS_PER_LEVEL = 10;
+const ADMIN_TEACHER_NAME = "eric-ablon-dos-santos-cerqueira";
+const ADMIN_TEACHER_PASSWORD = "2985";
 
 const difficulties = {
   facil: { label: "Fácil", multiplier: 1 },
@@ -367,6 +369,7 @@ function renderLogin() {
           <label>Nome completo<input name="fullName" type="text" autocomplete="name" minlength="3" required placeholder="Ex: Maria Silva" /></label>
           <label class="check-row"><input name="isTeacher" type="checkbox" data-action="toggle-teacher" ${state.loginMode === "teacher" ? "checked" : ""} /> Sou professor</label>
           <label class="teacher-birth ${state.loginMode === "teacher" ? "visible" : ""}">Data de nascimento do professor<input name="birthDate" type="date" /></label>
+          <label class="teacher-birth ${state.loginMode === "teacher" ? "visible" : ""}">Senha do professor<input name="teacherPassword" type="password" inputmode="numeric" maxlength="4" pattern="[0-9]{4}" placeholder="4 dígitos" /></label>
           ${state.loginError ? `<div class="feedback danger">${state.loginError}</div>` : ""}
           <button class="btn btn-primary" type="submit">Entrar</button>
         </form>
@@ -515,13 +518,16 @@ function renderTeacherDashboard() {
   const totals = students.map((student) => ({ student, stats: getStats(student.progress) }));
   const totalCorrect = totals.reduce((sum, item) => sum + item.stats.correct, 0);
   const totalWrong = totals.reduce((sum, item) => sum + item.stats.wrong, 0);
+  const totalAttempts = totals.reduce((sum, item) => sum + item.stats.attempts, 0);
+  const totalFinished = totals.reduce((sum, item) => sum + item.stats.completedLevels, 0);
+  const bestStudent = totals.filter((item) => item.stats.attempts > 0).sort((a, b) => b.stats.correct - a.stats.correct)[0];
   const maxBar = Math.max(totalCorrect, totalWrong, 1);
 
   app.innerHTML = `
     <div class="app-container">
       ${renderTopBar()}
       <header class="page-header"><div><h2>Painel do professor</h2><p>Desempenho dos alunos salvos neste navegador.</p></div><button class="btn btn-light" data-action="go-home">Voltar</button></header>
-      <section class="stats-grid"><div class="stat-card"><strong>${students.length}</strong><span>Alunos</span></div><div class="stat-card"><strong>${totalCorrect}</strong><span>Acertos totais</span></div><div class="stat-card"><strong>${totalWrong}</strong><span>Erros totais</span></div></section>
+      <section class="stats-grid"><div class="stat-card"><strong>${students.length}</strong><span>Alunos</span></div><div class="stat-card"><strong>${totalCorrect}</strong><span>Acertos totais</span></div><div class="stat-card"><strong>${totalWrong}</strong><span>Erros totais</span></div><div class="stat-card"><strong>${totalAttempts}</strong><span>Tentativas</span></div><div class="stat-card"><strong>${totalFinished}</strong><span>Fases concluídas</span></div><div class="stat-card"><strong>${bestStudent ? bestStudent.student.fullName.split(" ")[0] : "-"}</strong><span>Maior destaque</span></div></section>
       <section class="card chart-card"><h3>Gráfico geral</h3><div class="bar-row"><span>Acertos</span><div><b style="width:${(totalCorrect / maxBar) * 100}%"></b></div><strong>${totalCorrect}</strong></div><div class="bar-row wrong"><span>Erros</span><div><b style="width:${(totalWrong / maxBar) * 100}%"></b></div><strong>${totalWrong}</strong></div></section>
       <section class="list">${totals.length ? totals.map(({ student, stats }) => `<div class="list-item"><div><strong>${student.fullName}</strong><br /><small>${stats.completedLevels}/${stats.totalLevels} fases • média ${stats.averageCorrect} acertos e ${stats.averageWrong} erros</small></div><strong>${stats.correct} acertos</strong></div>`).join("") : `<div class="empty">Nenhum aluno jogou ainda neste navegador.</div>`}</section>
     </div>
@@ -547,6 +553,7 @@ app.addEventListener("submit", (event) => {
   const fullName = String(formData.get("fullName") || "").trim().replace(/\s+/g, " ");
   const isTeacher = formData.get("isTeacher") === "on";
   const birthDate = String(formData.get("birthDate") || "");
+  const teacherPassword = String(formData.get("teacherPassword") || "");
 
   if (fullName.length < 3) {
     state.loginError = "Preencha o nome completo.";
@@ -556,6 +563,18 @@ app.addEventListener("submit", (event) => {
   if (isTeacher && !birthDate) {
     state.loginMode = "teacher";
     state.loginError = "Professor precisa informar a data de nascimento.";
+    render();
+    return;
+  }
+  if (isTeacher && slug(fullName) !== ADMIN_TEACHER_NAME) {
+    state.loginMode = "teacher";
+    state.loginError = "Apenas o administrador autorizado pode entrar como professor.";
+    render();
+    return;
+  }
+  if (isTeacher && teacherPassword !== ADMIN_TEACHER_PASSWORD) {
+    state.loginMode = "teacher";
+    state.loginError = "Senha do professor inválida.";
     render();
     return;
   }
