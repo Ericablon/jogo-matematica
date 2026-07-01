@@ -56,7 +56,199 @@ function loadData() {
 }
 
 function saveData() {
+  data = normalizeData(data);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  scheduleCloudSave();
+}
+
+
+function canUseSupabase() {
+  return Boolean(
+    window.supabaseClient &&
+    window.SUPABASE_ANON_KEY !== "COLE_AQUI_SUA_CHAVE_PUBLICA_DO_SUPABASE"
+  );
+}
+
+function normalizeData(value) {
+  return {
+    students: value?.students || {},
+    teachers: value?.teachers || {}
+  };
+}
+
+function mergeProgress(localProgress = emptyProgress(), cloudProgress = emptyProgress()) {
+  const merged = {
+    completed: {},
+    attempts: [...(cloudProgress.attempts || []), ...(localProgress.attempts || [])],
+    lastPlayed: localProgress.lastPlayed || cloudProgress.lastPlayed || null
+  };
+
+  const localCompleted = localProgress.completed || {};
+  const cloudCompleted = cloudProgress.completed || {};
+  const allKeys = new Set([...Object.keys(cloudCompleted), ...Object.keys(localCompleted)]);
+
+  allKeys.forEach((key) => {
+    const localItem = localCompleted[key];
+    const cloudItem = cloudCompleted[key];
+
+    if (!localItem) {
+      merged.completed[key] = cloudItem;
+      return;
+    }
+
+    if (!cloudItem) {
+      merged.completed[key] = localItem;
+      return;
+    }
+
+    merged.completed[key] = {
+      ...cloudItem,
+      ...localItem,
+      passed: Boolean(cloudItem.passed || localItem.passed),
+      stars: Math.max(cloudItem.stars || 0, localItem.stars || 0),
+      bestScore: Math.max(cloudItem.bestScore || 0, localItem.bestScore || 0),
+      bestCorrect: Math.max(cloudItem.bestCorrect || 0, localItem.bestCorrect || 0),
+      updatedAt: localItem.updatedAt || cloudItem.updatedAt || new Date().toISOString()
+    };
+  });
+
+  const seenAttempts = new Set();
+  merged.attempts = merged.attempts
+    .filter((item) => {
+      const key = `${item.worldId}|${item.level}|${item.difficulty}|${item.correct}|${item.wrong}|${item.score}|${item.date}`;
+      if (seenAttempts.has(key)) return false;
+      seenAttempts.add(key);
+      return true;
+    })
+    .sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
+
+  return merged;
+}
+
+function mergeCloudData(localData, cloudData) {
+  const merged = normalizeData(localData);
+
+  Object.entries(cloudData.students || {}).forEach(([id, cloudStudent]) => {
+    const localStudent = merged.students[id];
+    merged.students[id] = {
+      ...cloudStudent,
+      ...localStudent,
+      progress: mergeProgress(localStudent?.progress, cloudStudent?.progress),
+      updatedAt: localStudent?.updatedAt || cloudStudent?.updatedAt || new Date().toISOString()
+    };
+  });
+
+  Object.entries(cloudData.teachers || {}).forEach(([id, cloudTeacher]) => {
+    const localTeacher = merged.teachers[id];
+    merged.teachers[id] = {
+      ...cloudTeacher,
+      ...localTeacher,
+      progress: mergeProgress(localTeacher?.progress, cloudTeacher?.progress),
+      updatedAt: localTeacher?.updatedAt || cloudTeacher?.updatedAt || new Date().toISOString()
+    };
+  });
+
+  return merged;
+}
+
+async function loadDataFromSupabase() {
+  if (!canUseSupabase()) return data;
+
+  try {
+    const [{ data: studentsRows, error: studentsError }, { data: teachersRows, error: teachersError }] = await Promise.all([
+      window.supabaseClient.from("math_students").select("id, full_name, progress, created_at, updated_at"),
+      window.supabaseClient.from("math_teachers").select("id, full_name, password, active, progress, created_at, updated_at")
+    ]);
+
+    if (studentsError) throw studentsError;
+    if (teachersError) throw teachersError;
+
+    const cloudData = { students: {}, teachers: {} };
+
+    (studentsRows || []).forEach((row) => {
+      cloudData.students[row.id] = {
+        id: row.id,
+        fullName: row.full_name,
+        progress: row.progress || emptyProgress(),
+        createdAt: row.created_at,
+        updatedAt: row.updated_at
+      };
+    });
+
+    (teachersRows || []).forEach((row) => {
+      cloudData.teachers[row.id] = {
+        id: row.id,
+        fullName: row.full_name,
+        password: row.password,
+        active: row.active !== false,
+        progress: row.progress || emptyProgress(),
+        createdAt: row.created_at,
+        updatedAt: row.updated_at
+      };
+    });
+
+    data = mergeCloudData(data, cloudData);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    return data;
+  } catch (error) {
+    console.error("Erro ao carregar dados do Supabase:", error);
+    return data;
+  }
+}
+
+let cloudSaveTimer = null;
+
+function scheduleCloudSave() {
+  if (!canUseSupabase()) return;
+
+  clearTimeout(cloudSaveTimer);
+  cloudSaveTimer = setTimeout(syncDataToSupabase, 500);
+}
+
+async function syncDataToSupabase() {
+  if (!canUseSupabase()) return;
+
+  try {
+    const students = Object.values(data.students || {}).map((student) => ({
+      id: student.id,
+      full_name: student.fullName,
+      progress: student.progress || emptyProgress(),
+      created_at: student.createdAt || new Date().toISOString(),
+      updated_at: student.updatedAt || new Date().toISOString()
+    }));
+
+    const teachers = Object.values(data.teachers || {}).map((teacher) => ({
+      id: teacher.id,
+      full_name: teacher.fullName,
+      password: teacher.password || null,
+      active: teacher.active !== false,
+      progress: teacher.progress || emptyProgress(),
+      created_at: teacher.createdAt || new Date().toISOString(),
+      updated_at: teacher.updatedAt || new Date().toISOString()
+    }));
+
+    if (students.length) {
+      const { error } = await window.supabaseClient
+        .from("math_students")
+        .upsert(students, { onConflict: "id" });
+      if (error) throw error;
+    }
+
+    if (teachers.length) {
+      const { error } = await window.supabaseClient
+        .from("math_teachers")
+        .upsert(teachers, { onConflict: "id" });
+      if (error) throw error;
+    }
+  } catch (error) {
+    console.error("Erro ao salvar dados no Supabase:", error);
+  }
+}
+
+async function initApp() {
+  data = normalizeData(loadData());
+  await loadDataFromSupabase();
+  render();
 }
 
 function slug(value) {
@@ -914,4 +1106,4 @@ app.addEventListener("input", (event) => {
   state.loginName = event.target.value;
 }, true);
 
-render();
+initApp();
