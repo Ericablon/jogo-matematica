@@ -1,52 +1,31 @@
 const app = document.getElementById("app");
 
-const STORAGE_KEY = "matematica_em_fases_v3";
-const LEGACY_STORAGE_KEY = "matematica_em_fases_v1";
+const STORAGE_KEY = "matematica_em_fases_v4";
 const LEVELS_PER_WORLD = 10;
+const QUESTIONS_PER_LEVEL = 10;
+
+const difficulties = {
+  facil: { label: "Fácil", multiplier: 1 },
+  media: { label: "Média", multiplier: 2 },
+  dificil: { label: "Difícil", multiplier: 3 },
+  super: { label: "Super difícil", multiplier: 5 }
+};
 
 const worlds = [
-  {
-    id: "soma",
-    name: "Soma",
-    emoji: "+",
-    description: "Aprenda adição com fases progressivas.",
-    operation: "add"
-  },
-  {
-    id: "subtracao",
-    name: "Subtração",
-    emoji: "-",
-    description: "Resolva contas de subtração sem complicação.",
-    operation: "subtract"
-  },
-  {
-    id: "multiplicacao",
-    name: "Multiplicação",
-    emoji: "×",
-    description: "Treine a tabuada de forma divertida.",
-    operation: "multiply"
-  },
-  {
-    id: "divisao",
-    name: "Divisão",
-    emoji: "÷",
-    description: "Pratique divisões exatas por fase.",
-    operation: "divide"
-  },
-  {
-    id: "misto",
-    name: "Desafio Misto",
-    emoji: "★",
-    description: "Misture tudo e teste seu raciocínio.",
-    operation: "mixed"
-  }
+  { id: "soma", name: "Soma", emoji: "+", description: "Contas de adição por fase.", operation: "add" },
+  { id: "subtracao", name: "Subtração", emoji: "-", description: "Contas de subtração com dificuldade progressiva.", operation: "subtract" },
+  { id: "multiplicacao", name: "Multiplicação", emoji: "×", description: "Treino de tabuada e multiplicação.", operation: "multiply" },
+  { id: "divisao", name: "Divisão", emoji: "÷", description: "Divisões exatas para praticar.", operation: "divide" },
+  { id: "misto", name: "Misto", emoji: "★", description: "Soma, divisão, multiplicação e desafios combinados.", operation: "mixed" }
 ];
 
-let gameData = loadGameData();
-let progress = getActiveProgress();
+let data = loadData();
 
 let state = {
-  screen: gameData.activePlayerId ? "home" : "login",
+  screen: "login",
+  currentUserId: null,
+  role: null,
+  difficulty: "facil",
   currentWorldId: null,
   currentLevel: null,
   questions: [],
@@ -58,61 +37,23 @@ let state = {
   answered: false,
   selectedAnswer: null,
   feedback: "",
+  loginMode: "student",
   loginError: ""
 };
 
-function createEmptyProgress() {
-  return {
-    completed: {},
-    lastPlayed: null
-  };
-}
-
-function createEmptyGameData() {
-  return {
-    players: {},
-    activePlayerId: null
-  };
-}
-
-function loadGameData() {
-  const saved = localStorage.getItem(STORAGE_KEY);
-
-  if (saved) {
-    try {
-      const parsed = JSON.parse(saved);
-      if (parsed.players && typeof parsed.players === "object") {
-        return parsed;
-      }
-    } catch {
-      return createEmptyGameData();
-    }
+function loadData() {
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE_KEY)) || { students: {}, teachers: {} };
+  } catch {
+    return { students: {}, teachers: {} };
   }
-
-  return createEmptyGameData();
 }
 
-function saveGameData() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(gameData));
+function saveData() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
 }
 
-function getActivePlayer() {
-  if (!gameData.activePlayerId) return null;
-  return gameData.players[gameData.activePlayerId] || null;
-}
-
-function getActiveProgress() {
-  const player = getActivePlayer();
-  return player?.progress || createEmptyProgress();
-}
-
-function setActivePlayer(playerId) {
-  gameData.activePlayerId = playerId;
-  progress = getActiveProgress();
-  saveGameData();
-}
-
-function normalizeText(value) {
+function slug(value) {
   return value
     .trim()
     .toLowerCase()
@@ -122,118 +63,58 @@ function normalizeText(value) {
     .replace(/^-+|-+$/g, "");
 }
 
-function createPlayerId(fullName) {
-  return normalizeText(fullName);
+function emptyProgress() {
+  return { completed: {}, attempts: [], lastPlayed: null };
 }
 
-function createOrSelectPlayer(fullName) {
-  const cleanName = fullName.trim().replace(/\s+/g, " ");
-  const playerId = createPlayerId(cleanName);
-  const legacyProgress = tryLoadLegacyProgress();
-
-  if (!gameData.players[playerId]) {
-    gameData.players[playerId] = {
-      id: playerId,
-      fullName: cleanName,
-      progress: legacyProgress || createEmptyProgress(),
-      createdAt: new Date().toISOString()
-    };
-  }
-
-  setActivePlayer(playerId);
+function activeUser() {
+  if (!state.currentUserId) return null;
+  return state.role === "teacher" ? data.teachers[state.currentUserId] : data.students[state.currentUserId];
 }
 
-function tryLoadLegacyProgress() {
-  if (Object.keys(gameData.players).length > 0) return null;
-
-  const saved = localStorage.getItem(LEGACY_STORAGE_KEY);
-  if (!saved) return null;
-
-  try {
-    const parsed = JSON.parse(saved);
-    if (parsed.completed && typeof parsed.completed === "object") {
-      return parsed;
-    }
-  } catch {
-    return null;
-  }
-
-  return null;
+function activeProgress() {
+  return activeUser()?.progress || emptyProgress();
 }
 
-function saveProgress() {
-  const player = getActivePlayer();
-  if (!player) return;
-
-  player.progress = progress;
-  player.updatedAt = new Date().toISOString();
-  saveGameData();
+function saveActiveProgress(progress) {
+  const user = activeUser();
+  if (!user) return;
+  user.progress = progress;
+  user.updatedAt = new Date().toISOString();
+  saveData();
 }
 
 function getLevelKey(worldId, level) {
   return `${worldId}_fase_${level}`;
 }
 
-function getWorldById(worldId) {
+function getWorld(worldId) {
   return worlds.find((world) => world.id === worldId);
-}
-
-function getLevelData(worldId, level) {
-  const key = getLevelKey(worldId, level);
-  return progress.completed[key];
-}
-
-function isLevelUnlocked(worldId, level) {
-  return true;
-}
-
-function getTotalStats(targetProgress = progress) {
-  const levels = Object.values(targetProgress.completed);
-
-  const totalScore = levels.reduce((sum, item) => sum + (item.bestScore || 0), 0);
-  const totalStars = levels.reduce((sum, item) => sum + (item.stars || 0), 0);
-  const completedLevels = levels.filter((item) => item.passed).length;
-  const totalLevels = worlds.length * LEVELS_PER_WORLD;
-
-  return {
-    totalScore,
-    totalStars,
-    completedLevels,
-    totalLevels,
-    isGameComplete: completedLevels >= totalLevels
-  };
-}
-
-function formatDate(value) {
-  if (!value) return "";
-  const [year, month, day] = value.split("-");
-  return `${day}/${month}/${year}`;
 }
 
 function randomNumber(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
-function shuffleArray(array) {
+function shuffle(array) {
   return array.sort(() => Math.random() - 0.5);
 }
 
+function difficultyPower(level) {
+  return Math.max(1, level) * difficulties[state.difficulty].multiplier;
+}
+
 function generateQuestion(operation, level) {
-  const difficulty = Math.max(1, level);
+  if (operation === "mixed") return generateMixedQuestion(level);
 
-  if (operation === "mixed") {
-    const operations = ["add", "subtract", "multiply", "divide"];
-    const selectedOperation = operations[randomNumber(0, operations.length - 1)];
-    return generateQuestion(selectedOperation, level);
-  }
-
+  const power = difficultyPower(level);
   let a;
   let b;
   let correct;
   let text;
 
   if (operation === "add") {
-    const max = 8 + difficulty * 6;
+    const max = 8 + power * 5;
     a = randomNumber(1, max);
     b = randomNumber(1, max);
     correct = a + b;
@@ -241,7 +122,7 @@ function generateQuestion(operation, level) {
   }
 
   if (operation === "subtract") {
-    const max = 10 + difficulty * 8;
+    const max = 12 + power * 6;
     a = randomNumber(5, max);
     b = randomNumber(1, a);
     correct = a - b;
@@ -249,7 +130,7 @@ function generateQuestion(operation, level) {
   }
 
   if (operation === "multiply") {
-    const max = Math.min(12, 3 + difficulty);
+    const max = Math.min(20, 4 + power);
     a = randomNumber(1, max);
     b = randomNumber(1, max);
     correct = a * b;
@@ -257,46 +138,61 @@ function generateQuestion(operation, level) {
   }
 
   if (operation === "divide") {
-    const divisor = randomNumber(1, Math.min(12, 3 + difficulty));
-    const quotient = randomNumber(1, 4 + difficulty * 2);
-    const dividend = divisor * quotient;
-
+    const divisor = randomNumber(1, Math.min(20, 4 + power));
+    const quotient = randomNumber(1, 5 + power);
     correct = quotient;
-    text = `${dividend} ÷ ${divisor}`;
+    text = `${divisor * quotient} ÷ ${divisor}`;
   }
 
-  return {
-    text,
-    correct,
-    answers: generateAnswers(correct)
-  };
+  return buildQuestion(text, correct);
+}
+
+function generateMixedQuestion(level) {
+  const power = difficultyPower(level);
+
+  if (state.difficulty === "facil") {
+    return generateQuestion(["add", "subtract", "multiply", "divide"][randomNumber(0, 3)], level);
+  }
+
+  if (state.difficulty === "media") {
+    const a = randomNumber(2, 10 + power);
+    const b = randomNumber(2, 10 + power);
+    const c = randomNumber(1, 8 + power);
+    return buildQuestion(`${a} × ${b} + ${c}`, a * b + c);
+  }
+
+  if (state.difficulty === "dificil") {
+    const divisor = randomNumber(2, 10);
+    const quotient = randomNumber(2, 8 + power);
+    const c = randomNumber(2, 12 + power);
+    return buildQuestion(`${divisor * quotient} ÷ ${divisor} + ${c}`, quotient + c);
+  }
+
+  const a = randomNumber(2, 12);
+  const b = randomNumber(2, 12);
+  const divisor = randomNumber(2, 10);
+  const quotient = randomNumber(2, 12 + power);
+  const c = randomNumber(1, 20);
+  return buildQuestion(`${a} × ${b} + ${divisor * quotient} ÷ ${divisor} - ${c}`, a * b + quotient - c);
+}
+
+function buildQuestion(text, correct) {
+  return { text, correct, answers: generateAnswers(correct) };
 }
 
 function generateAnswers(correct) {
-  const answers = new Set();
-  answers.add(correct);
-
+  const answers = new Set([correct]);
+  const range = Math.max(10, Math.abs(correct));
   while (answers.size < 4) {
-    const variation = randomNumber(-10, 10);
-    const wrongAnswer = correct + variation;
-
-    if (wrongAnswer >= 0 && wrongAnswer !== correct) {
-      answers.add(wrongAnswer);
-    }
+    const wrong = correct + randomNumber(-range, range);
+    if (wrong >= 0 && wrong !== correct) answers.add(wrong);
   }
-
-  return shuffleArray([...answers]);
+  return shuffle([...answers]);
 }
 
 function generateLevelQuestions(worldId, level) {
-  const world = getWorldById(worldId);
-  const questions = [];
-
-  for (let i = 0; i < 10; i++) {
-    questions.push(generateQuestion(world.operation, level));
-  }
-
-  return questions;
+  const world = getWorld(worldId);
+  return Array.from({ length: QUESTIONS_PER_LEVEL }, () => generateQuestion(world.operation, level));
 }
 
 function getStars(correct) {
@@ -307,20 +203,33 @@ function getStars(correct) {
 }
 
 function renderStars(amount) {
-  if (!amount) return "☆ ☆ ☆";
-
-  const full = "★".repeat(amount);
-  const empty = "☆".repeat(3 - amount);
-
-  return `${full}${empty}`;
+  return `${"★".repeat(amount || 0)}${"☆".repeat(3 - (amount || 0))}`;
 }
 
-function goTo(screen) {
-  state.screen = screen;
-  render();
+function getStats(progress = activeProgress()) {
+  const completed = Object.values(progress.completed || {});
+  const attempts = progress.attempts || [];
+  const correct = attempts.reduce((sum, item) => sum + item.correct, 0);
+  const wrong = attempts.reduce((sum, item) => sum + item.wrong, 0);
+
+  return {
+    completedLevels: completed.filter((item) => item.passed).length,
+    totalLevels: worlds.length * LEVELS_PER_WORLD,
+    totalScore: completed.reduce((sum, item) => sum + (item.bestScore || 0), 0),
+    totalStars: completed.reduce((sum, item) => sum + (item.stars || 0), 0),
+    attempts: attempts.length,
+    correct,
+    wrong,
+    averageCorrect: attempts.length ? (correct / attempts.length).toFixed(1) : "0.0",
+    averageWrong: attempts.length ? (wrong / attempts.length).toFixed(1) : "0.0"
+  };
 }
 
 function startLevel(worldId, level) {
+  const progress = activeProgress();
+  progress.lastPlayed = { worldId, level, difficulty: state.difficulty };
+  saveActiveProgress(progress);
+
   state = {
     ...state,
     screen: "game",
@@ -334,50 +243,35 @@ function startLevel(worldId, level) {
     wrong: 0,
     answered: false,
     selectedAnswer: null,
-    feedback: "",
-    loginError: ""
+    feedback: ""
   };
-
-  progress.lastPlayed = {
-    worldId,
-    level
-  };
-
-  saveProgress();
   render();
 }
 
 function answerQuestion(answer) {
   if (state.answered) return;
-
-  const currentQuestion = state.questions[state.questionIndex];
-  const isCorrect = Number(answer) === currentQuestion.correct;
-
+  const question = state.questions[state.questionIndex];
+  const isCorrect = Number(answer) === question.correct;
   state.answered = true;
   state.selectedAnswer = Number(answer);
 
   if (isCorrect) {
     state.correct += 1;
-    state.score += 100 + state.lives * 10;
-    state.feedback = "Muito bem! Resposta correta.";
+    state.score += 100 + state.currentLevel * 10 + difficulties[state.difficulty].multiplier * 20;
+    state.feedback = "Muito bem! Você acertou.";
   } else {
     state.wrong += 1;
     state.lives -= 1;
-    state.feedback = `Ops! A resposta certa era ${currentQuestion.correct}.`;
+    state.feedback = `Quase! A resposta certa era ${question.correct}.`;
   }
-
   render();
 }
 
 function nextQuestion() {
-  const isLastQuestion = state.questionIndex >= state.questions.length - 1;
-  const isOutOfLives = state.lives <= 0;
-
-  if (isLastQuestion || isOutOfLives) {
+  if (state.questionIndex >= state.questions.length - 1 || state.lives <= 0) {
     finishLevel();
     return;
   }
-
   state.questionIndex += 1;
   state.answered = false;
   state.selectedAnswer = null;
@@ -386,75 +280,70 @@ function nextQuestion() {
 }
 
 function finishLevel() {
+  const progress = activeProgress();
+  const key = getLevelKey(state.currentWorldId, state.currentLevel);
+  const old = progress.completed[key];
   const stars = getStars(state.correct);
-  const passed = state.correct >= 7;
+  const passed = state.correct >= 6;
   const finalScore = state.score + stars * 200;
 
-  const key = getLevelKey(state.currentWorldId, state.currentLevel);
-  const oldData = progress.completed[key];
+  progress.completed[key] = {
+    worldId: state.currentWorldId,
+    level: state.currentLevel,
+    passed: passed || Boolean(old?.passed),
+    stars: Math.max(stars, old?.stars || 0),
+    bestScore: Math.max(finalScore, old?.bestScore || 0),
+    bestCorrect: Math.max(state.correct, old?.bestCorrect || 0),
+    difficulty: state.difficulty,
+    updatedAt: new Date().toISOString()
+  };
 
-  const shouldSave =
-    !oldData ||
-    finalScore > oldData.bestScore ||
-    stars > oldData.stars ||
-    passed;
+  progress.attempts.push({
+    worldId: state.currentWorldId,
+    level: state.currentLevel,
+    difficulty: state.difficulty,
+    correct: state.correct,
+    wrong: state.wrong,
+    score: finalScore,
+    date: new Date().toISOString()
+  });
 
-  if (shouldSave) {
-    progress.completed[key] = {
-      worldId: state.currentWorldId,
-      level: state.currentLevel,
-      passed: passed || Boolean(oldData?.passed),
-      stars: Math.max(stars, oldData?.stars || 0),
-      bestScore: Math.max(finalScore, oldData?.bestScore || 0),
-      bestCorrect: Math.max(state.correct, oldData?.bestCorrect || 0),
-      updatedAt: new Date().toISOString()
-    };
-
-    saveProgress();
-  }
-
+  saveActiveProgress(progress);
   state.score = finalScore;
   state.screen = "result";
   render();
 }
 
+function exitLevel() {
+  if (!confirm("Deseja sair desta fase? Seu progresso desta tentativa não será salvo.")) return;
+  state.screen = "levels";
+  state.answered = false;
+  render();
+}
+
 function resetProgress() {
-  const confirmReset = confirm("Tem certeza que deseja apagar o progresso deste jogador?");
-
-  if (!confirmReset) return;
-
-  progress = createEmptyProgress();
-  saveProgress();
-  state.screen = "home";
+  if (!confirm("Deseja apagar o progresso deste aluno?")) return;
+  const user = activeUser();
+  if (!user) return;
+  user.progress = emptyProgress();
+  saveData();
   render();
 }
 
-function logoutPlayer() {
-  gameData.activePlayerId = null;
-  progress = createEmptyProgress();
-  saveGameData();
-  state.screen = "login";
-  render();
+function helperText(question) {
+  if (!question) return "Observe a conta e escolha com calma.";
+  if (question.text.includes("+") && question.text.includes("×")) return "Resolva primeiro a multiplicação, depois a soma.";
+  if (question.text.includes("÷") && question.text.includes("+")) return "Resolva primeiro a divisão, depois some o resultado.";
+  if (question.text.includes("×")) return "Multiplicar é somar o mesmo número várias vezes.";
+  if (question.text.includes("÷")) return "Dividir é repartir em partes iguais.";
+  if (question.text.includes("+")) return "Some juntando os dois valores.";
+  if (question.text.includes("-")) return "Subtraia retirando o segundo valor do primeiro.";
+  return "Vá por partes e confira o sinal.";
 }
 
-function renderPlayerBar() {
-  const player = getActivePlayer();
-  if (!player) return "";
-
+function mascot(message) {
   return `
-    <div class="player-bar">
-      <div>
-        <strong>${player.fullName}</strong>
-        <span>Progresso salvo neste navegador</span>
-      </div>
-      <button class="btn btn-light" data-action="logout">Trocar jogador</button>
-    </div>
-  `;
-}
-
-function renderMascot(message, mood = "happy") {
-  return `
-    <div class="mascot-card ${mood}">
+    <div class="mascot-card">
       <div class="mascot" aria-hidden="true">
         <span class="mascot-head"></span>
         <span class="mascot-body"></span>
@@ -466,219 +355,69 @@ function renderMascot(message, mood = "happy") {
   `;
 }
 
-function getHelperMessage(question) {
-  if (!question) return "Respire, observe a conta e escolha com calma.";
-
-  if (question.text.includes("+")) {
-    return "Dica: junte os dois grupos. Somar é colocar tudo no mesmo conjunto.";
-  }
-
-  if (question.text.includes("-")) {
-    return "Dica: comece pelo número maior e retire a quantidade menor.";
-  }
-
-  if (question.text.includes("×") || question.text.includes("Ã—")) {
-    return "Dica: multiplicar é somar o mesmo número várias vezes.";
-  }
-
-  if (question.text.includes("÷") || question.text.includes("Ã·")) {
-    return "Dica: dividir é repartir em partes iguais.";
-  }
-
-  return "Dica: leia o sinal primeiro, depois resolva passo a passo.";
-}
-
 function renderLogin() {
-  const players = Object.values(gameData.players);
-  const playerList = players.length
-    ? players
-        .map((player) => {
-          const stats = getTotalStats(player.progress);
-          return `
-            <button class="player-option" data-action="select-player" data-player="${player.id}">
-              <span>
-                <strong>${player.fullName}</strong>
-                <small>${formatDate(player.birthDate)} • ${stats.completedLevels}/${stats.totalLevels} fases</small>
-              </span>
-              <b>Entrar</b>
-            </button>
-          `;
-        })
-        .join("")
-    : `<div class="empty">Nenhum jogador cadastrado ainda.</div>`;
-
   app.innerHTML = `
     <div class="app-container">
       <section class="card login-card">
-        <div class="logo-badge">Jogo educativo</div>
-        <h1>Matemática em Fases</h1>
-        <p>Crie um jogador para salvar o progresso pelo nome completo e data de nascimento.</p>
-
-        <form class="login-form" data-form="player">
-          <label>
-            Nome completo
-            <input name="fullName" type="text" autocomplete="name" minlength="3" required placeholder="Ex: Maria Silva" />
-          </label>
-
-          <label>
-            Data de nascimento
-            <input name="birthDate" type="date" required />
-          </label>
-
+        <div class="brand-mark"><span>JM</span><b>Jogo de Matemática</b></div>
+        <div class="logo-badge">Azul, vermelho e dourado</div>
+        <h1>Jogo de Matemática</h1>
+        <p>Login: informe seu nome completo. Se for professor, marque a opção e informe também a data de nascimento.</p>
+        ${mascot("Aluno entra direto. Professor ganha uma tela extra para acompanhar todos os desempenhos.")}
+        <form class="login-form" data-form="login">
+          <label>Nome completo<input name="fullName" type="text" autocomplete="name" minlength="3" required placeholder="Ex: Maria Silva" /></label>
+          <label class="check-row"><input name="isTeacher" type="checkbox" data-action="toggle-teacher" /> Sou professor</label>
+          <label class="teacher-birth ${state.loginMode === "teacher" ? "visible" : ""}">Data de nascimento do professor<input name="birthDate" type="date" /></label>
           ${state.loginError ? `<div class="feedback danger">${state.loginError}</div>` : ""}
-
-          <button class="btn btn-primary" type="submit">Entrar no jogo</button>
+          <button class="btn btn-primary" type="submit">Entrar</button>
         </form>
-      </section>
-
-      <section class="card login-card">
-        <h2>Jogadores salvos</h2>
-        <div class="player-list">
-          ${playerList}
-        </div>
       </section>
     </div>
   `;
 }
 
-function renderLogin() {
-  const players = Object.values(gameData.players);
-  const playerList = players.length
-    ? players
-        .map((player) => {
-          const stats = getTotalStats(player.progress);
-          return `
-            <button class="player-option" data-action="select-player" data-player="${player.id}">
-              <span>
-                <strong>${player.fullName}</strong>
-                <small>${stats.completedLevels}/${stats.totalLevels} fases concluídas</small>
-              </span>
-              <b>Entrar</b>
-            </button>
-          `;
-        })
-        .join("")
-    : `<div class="empty">Nenhum jogador cadastrado ainda.</div>`;
+function renderTopBar() {
+  const user = activeUser();
+  return `
+    <div class="player-bar">
+      <div><strong>${user?.fullName || ""}</strong><span>${state.role === "teacher" ? "Professor" : "Aluno"} • ${difficulties[state.difficulty].label}</span></div>
+      <div class="top-actions">
+        ${state.role === "teacher" ? `<button class="btn btn-light" data-action="teacher-dashboard">Painel professor</button>` : ""}
+        <button class="btn btn-light" data-action="logout">Sair</button>
+      </div>
+    </div>
+  `;
+}
 
-  app.innerHTML = `
-    <div class="app-container">
-      <section class="card login-card">
-        <div class="brand-mark">
-          <span>UN</span>
-          <b>Matemática</b>
-        </div>
-        <div class="logo-badge">Inspirado nas cores da UNEB</div>
-        <h1>Matemática em Fases</h1>
-        <p>Digite seu nome completo para entrar e salvar seu progresso neste navegador.</p>
-
-        ${renderMascot("Olá! Eu vou te acompanhar nas contas. Vamos aprender sem pressa?", "welcome")}
-
-        <form class="login-form" data-form="player">
-          <label>
-            Nome completo
-            <input name="fullName" type="text" autocomplete="name" minlength="3" required placeholder="Ex: Maria Silva" />
-          </label>
-
-          ${state.loginError ? `<div class="feedback danger">${state.loginError}</div>` : ""}
-
-          <button class="btn btn-primary" type="submit">Entrar no jogo</button>
-        </form>
-      </section>
-
-      <section class="card login-card">
-        <h2>Jogadores salvos</h2>
-        <div class="player-list">
-          ${playerList}
-        </div>
-      </section>
+function renderDifficultyPicker() {
+  return `
+    <div class="difficulty-row">
+      ${Object.entries(difficulties).map(([id, difficulty]) => `
+        <button class="difficulty-btn ${state.difficulty === id ? "active" : ""}" data-action="set-difficulty" data-difficulty="${id}">${difficulty.label}</button>
+      `).join("")}
     </div>
   `;
 }
 
 function renderHome() {
-  const stats = getTotalStats();
-
-  const continueButton = progress.lastPlayed
-    ? `<button class="btn btn-secondary" data-action="continue">Continuar fase</button>`
-    : "";
-
+  const stats = getStats();
   app.innerHTML = `
     <div class="app-container">
-      ${renderPlayerBar()}
+      ${renderTopBar()}
       <section class="hero">
-        <div class="logo-badge">${stats.isGameComplete ? "Jogo zerado!" : "Jogo educativo"}</div>
-        <h1>Matemática em Fases</h1>
-        <p>
-          Resolva desafios, ganhe estrelas, avance de fase e salve o progresso de cada jogador até zerar o jogo.
-        </p>
-
+        <div class="logo-badge">Todas as fases liberadas</div>
+        <h1>Jogo de Matemática</h1>
+        <p>Escolha a dificuldade, entre em qualquer fase e treine no seu ritmo.</p>
+        ${renderDifficultyPicker()}
+        ${mascot("Pode sair da fase quando quiser pelo botão Sair da fase.")}
         <div class="actions">
-          <button class="btn btn-primary" data-action="go-worlds">Jogar agora</button>
-          ${continueButton}
+          <button class="btn btn-primary" data-action="go-worlds">Jogar</button>
           <button class="btn btn-light" data-action="go-ranking">Meu desempenho</button>
         </div>
-
         <div class="stats-grid">
-          <div class="stat-card">
-            <strong>${stats.completedLevels}/${stats.totalLevels}</strong>
-            <span>Fases concluídas</span>
-          </div>
-
-          <div class="stat-card">
-            <strong>${stats.totalStars}</strong>
-            <span>Estrelas ganhas</span>
-          </div>
-
-          <div class="stat-card">
-            <strong>${stats.totalScore}</strong>
-            <span>Pontos totais</span>
-          </div>
-        </div>
-      </section>
-    </div>
-  `;
-}
-
-function renderHome() {
-  const stats = getTotalStats();
-
-  const continueButton = progress.lastPlayed
-    ? `<button class="btn btn-secondary" data-action="continue">Continuar fase</button>`
-    : "";
-
-  app.innerHTML = `
-    <div class="app-container">
-      ${renderPlayerBar()}
-      <section class="hero">
-        <div class="logo-badge">${stats.isGameComplete ? "Jogo zerado!" : "Jogo educativo"}</div>
-        <h1>Matemática em Fases</h1>
-        <p>
-          Escolha qualquer fase, treine no seu ritmo e conte com o ajudante para resolver cada cálculo.
-        </p>
-
-        ${renderMascot("Todas as fases estão abertas. Você pode começar pela mais fácil ou ir direto para um desafio!", "hero-helper")}
-
-        <div class="actions">
-          <button class="btn btn-primary" data-action="go-worlds">Jogar agora</button>
-          ${continueButton}
-          <button class="btn btn-light" data-action="go-ranking">Meu desempenho</button>
-        </div>
-
-        <div class="stats-grid">
-          <div class="stat-card">
-            <strong>${stats.completedLevels}/${stats.totalLevels}</strong>
-            <span>Fases concluídas</span>
-          </div>
-
-          <div class="stat-card">
-            <strong>${stats.totalStars}</strong>
-            <span>Estrelas ganhas</span>
-          </div>
-
-          <div class="stat-card">
-            <strong>${stats.totalScore}</strong>
-            <span>Pontos totais</span>
-          </div>
+          <div class="stat-card"><strong>${stats.completedLevels}/${stats.totalLevels}</strong><span>Fases concluídas</span></div>
+          <div class="stat-card"><strong>${stats.correct}</strong><span>Acertos totais</span></div>
+          <div class="stat-card"><strong>${stats.wrong}</strong><span>Erros totais</span></div>
         </div>
       </section>
     </div>
@@ -686,310 +425,106 @@ function renderHome() {
 }
 
 function renderWorlds() {
-  const cards = worlds
-    .map((world) => {
-      return `
-        <article class="card world-card" data-action="select-world" data-world="${world.id}">
-          <div class="world-icon">${world.emoji}</div>
-          <h3>${world.name}</h3>
-          <p>${world.description}</p>
-        </article>
-      `;
-    })
-    .join("");
-
   app.innerHTML = `
     <div class="app-container">
-      ${renderPlayerBar()}
-      <header class="page-header">
-        <div>
-          <h2>Escolha um mundo</h2>
-          <p>Cada mundo tem fases com dificuldade progressiva.</p>
-        </div>
-
-        <button class="btn btn-light" data-action="go-home">Voltar</button>
-      </header>
-
+      ${renderTopBar()}
+      <header class="page-header"><div><h2>Escolha um mundo</h2><p>Misto tem contas combinadas e fica mais complexo conforme a dificuldade.</p></div><button class="btn btn-light" data-action="go-home">Voltar</button></header>
       <section class="grid world-grid">
-        ${cards}
+        ${worlds.map((world) => `
+          <article class="card world-card" data-action="select-world" data-world="${world.id}">
+            <div class="world-icon">${world.emoji}</div><h3>${world.name}</h3><p>${world.description}</p>
+          </article>
+        `).join("")}
       </section>
     </div>
   `;
 }
 
 function renderLevels() {
-  const world = getWorldById(state.currentWorldId);
-
-  const levels = Array.from({ length: LEVELS_PER_WORLD }, (_, index) => {
-    const level = index + 1;
-    const unlocked = isLevelUnlocked(world.id, level);
-    const data = getLevelData(world.id, level);
-    const stars = data ? renderStars(data.stars) : "☆ ☆ ☆";
-    const lockedClass = unlocked ? "" : "locked";
-
-    return `
-      <article
-        class="card level-card ${lockedClass}"
-        data-action="${unlocked ? "start-level" : ""}"
-        data-world="${world.id}"
-        data-level="${level}"
-      >
-        <div class="level-number">Fase ${level}</div>
-        <div class="stars">${unlocked ? stars : "Bloqueada"}</div>
-        <small>${data?.passed ? "Concluída" : unlocked ? "Disponível" : "Bloqueada"}</small>
-      </article>
-    `;
-  }).join("");
-
+  const progress = activeProgress();
+  const world = getWorld(state.currentWorldId);
   app.innerHTML = `
     <div class="app-container">
-      ${renderPlayerBar()}
-      <header class="page-header">
-        <div>
-          <h2>${world.emoji} ${world.name}</h2>
-          <p>Acerte pelo menos 7 de 10 para liberar a próxima fase.</p>
-        </div>
-
-        <button class="btn btn-light" data-action="go-worlds">Voltar</button>
-      </header>
-
+      ${renderTopBar()}
+      <header class="page-header"><div><h2>${world.emoji} ${world.name}</h2><p>Todas as fases estão disponíveis.</p></div><button class="btn btn-light" data-action="go-worlds">Voltar</button></header>
       <section class="grid level-grid">
-        ${levels}
-      </section>
-    </div>
-  `;
-}
-
-function renderLevels() {
-  const world = getWorldById(state.currentWorldId);
-
-  const levels = Array.from({ length: LEVELS_PER_WORLD }, (_, index) => {
-    const level = index + 1;
-    const data = getLevelData(world.id, level);
-    const stars = data ? renderStars(data.stars) : "☆ ☆ ☆";
-
-    return `
-      <article
-        class="card level-card"
-        data-action="start-level"
-        data-world="${world.id}"
-        data-level="${level}"
-      >
-        <div class="level-number">Fase ${level}</div>
-        <div class="stars">${stars}</div>
-        <small>${data?.passed ? "Concluída" : "Disponível"}</small>
-      </article>
-    `;
-  }).join("");
-
-  app.innerHTML = `
-    <div class="app-container">
-      ${renderPlayerBar()}
-      <header class="page-header">
-        <div>
-          <h2>${world.emoji} ${world.name}</h2>
-          <p>Todas as fases estão disponíveis. Escolha uma e pratique no seu ritmo.</p>
-        </div>
-
-        <button class="btn btn-light" data-action="go-worlds">Voltar</button>
-      </header>
-
-      <section class="grid level-grid">
-        ${levels}
+        ${Array.from({ length: LEVELS_PER_WORLD }, (_, index) => {
+          const level = index + 1;
+          const item = progress.completed[getLevelKey(world.id, level)];
+          return `<article class="card level-card" data-action="start-level" data-world="${world.id}" data-level="${level}"><div class="level-number">Fase ${level}</div><div class="stars">${renderStars(item?.stars || 0)}</div><small>${item?.passed ? "Concluída" : "Disponível"}</small></article>`;
+        }).join("")}
       </section>
     </div>
   `;
 }
 
 function renderGame() {
-  const world = getWorldById(state.currentWorldId);
-  const currentQuestion = state.questions[state.questionIndex];
-
-  const answers = currentQuestion.answers
-    .map((answer) => {
-      let className = "";
-
-      if (state.answered) {
-        if (answer === currentQuestion.correct) {
-          className = "correct";
-        } else if (answer === state.selectedAnswer) {
-          className = "wrong";
-        }
-      }
-
-      return `
-        <button
-          class="answer-btn ${className}"
-          data-action="answer"
-          data-answer="${answer}"
-          ${state.answered ? "disabled" : ""}
-        >
-          ${answer}
-        </button>
-      `;
-    })
-    .join("");
-
-  const feedbackClass =
-    state.answered && state.selectedAnswer === currentQuestion.correct
-      ? "success"
-      : "danger";
+  const world = getWorld(state.currentWorldId);
+  const question = state.questions[state.questionIndex];
+  const answers = question.answers.map((answer) => {
+    let className = "";
+    if (state.answered) {
+      if (answer === question.correct) className = "correct";
+      else if (answer === state.selectedAnswer) className = "wrong";
+    }
+    return `<button class="answer-btn ${className}" data-action="answer" data-answer="${answer}" ${state.answered ? "disabled" : ""}>${answer}</button>`;
+  }).join("");
+  const feedbackClass = state.selectedAnswer === question.correct ? "success" : "danger";
 
   app.innerHTML = `
     <div class="app-container">
       <section class="card game-card">
-        <div class="game-top">
-          <div class="pill">${world.emoji} ${world.name}</div>
-          <div class="pill">Fase ${state.currentLevel}</div>
-          <div class="pill">Vidas: ${state.lives}</div>
-          <div class="pill">Pontos: ${state.score}</div>
-        </div>
-
-        <div class="question-box">
-          <div class="question-label">
-            Pergunta ${state.questionIndex + 1} de ${state.questions.length}
-          </div>
-
-          <div class="question">
-            ${currentQuestion.text}
-          </div>
-        </div>
-
-        ${renderMascot(getHelperMessage(currentQuestion), "game-helper")}
-
-        <div class="answers">
-          ${answers}
-        </div>
-
-        ${
-          state.answered
-            ? `
-              <div class="feedback ${feedbackClass}">
-                ${state.feedback}
-              </div>
-
-              <div class="actions" style="margin-top: 18px; justify-content: center;">
-                <button class="btn btn-primary" data-action="next-question">
-                  Próxima
-                </button>
-              </div>
-            `
-            : ""
-        }
+        <div class="game-top"><div class="pill">${world.emoji} ${world.name}</div><div class="pill">Fase ${state.currentLevel}</div><div class="pill">${difficulties[state.difficulty].label}</div><div class="pill">Vidas: ${state.lives}</div><button class="btn btn-light" data-action="exit-level">Sair da fase</button></div>
+        <div class="question-box"><div class="question-label">Pergunta ${state.questionIndex + 1} de ${state.questions.length}</div><div class="question">${question.text}</div></div>
+        ${mascot(helperText(question))}
+        <div class="answers">${answers}</div>
+        ${state.answered ? `<div class="feedback ${feedbackClass}">${state.feedback}</div><div class="actions" style="margin-top:18px;justify-content:center;"><button class="btn btn-primary" data-action="next-question">Próxima</button></div>` : ""}
       </section>
     </div>
   `;
 }
 
 function renderResult() {
-  const stars = getStars(state.correct);
-  const passed = state.correct >= 7;
-  const world = getWorldById(state.currentWorldId);
-  const stats = getTotalStats();
-
+  const world = getWorld(state.currentWorldId);
   app.innerHTML = `
     <div class="app-container">
       <section class="card result-card">
-        <h2>${passed ? "Fase concluída!" : "Tente novamente!"}</h2>
-
-        <p>
-          ${world.emoji} ${world.name} - Fase ${state.currentLevel}
-        </p>
-
-        <div class="big-stars">
-          ${renderStars(stars)}
-        </div>
-
-        ${stats.isGameComplete ? `<p class="complete-message">Parabéns! Você zerou o jogo com este jogador.</p>` : ""}
-
-        <div class="result-grid">
-          <div class="result-item">
-            <strong>${state.correct}</strong>
-            <span>Acertos</span>
-          </div>
-
-          <div class="result-item">
-            <strong>${state.wrong}</strong>
-            <span>Erros</span>
-          </div>
-
-          <div class="result-item">
-            <strong>${state.lives}</strong>
-            <span>Vidas</span>
-          </div>
-
-          <div class="result-item">
-            <strong>${state.score}</strong>
-            <span>Pontos</span>
-          </div>
-        </div>
-
-        <div class="actions" style="justify-content: center;">
-          <button class="btn btn-primary" data-action="retry-level">
-            Jogar novamente
-          </button>
-
-          ${
-            passed && state.currentLevel < LEVELS_PER_WORLD
-              ? `<button class="btn btn-secondary" data-action="next-level">Próxima fase</button>`
-              : ""
-          }
-
-          <button class="btn btn-light" data-action="go-levels">
-            Ver fases
-          </button>
-        </div>
+        <h2>${state.correct >= 6 ? "Fase concluída!" : "Continue tentando!"}</h2>
+        <p>${world.emoji} ${world.name} - Fase ${state.currentLevel} • ${difficulties[state.difficulty].label}</p>
+        <div class="big-stars">${renderStars(getStars(state.correct))}</div>
+        <div class="result-grid"><div class="result-item"><strong>${state.correct}</strong><span>Acertos</span></div><div class="result-item"><strong>${state.wrong}</strong><span>Erros</span></div><div class="result-item"><strong>${state.lives}</strong><span>Vidas</span></div><div class="result-item"><strong>${state.score}</strong><span>Pontos</span></div></div>
+        <div class="actions" style="justify-content:center;"><button class="btn btn-primary" data-action="retry-level">Jogar novamente</button><button class="btn btn-secondary" data-action="next-level">Próxima fase</button><button class="btn btn-light" data-action="go-levels">Ver fases</button></div>
       </section>
     </div>
   `;
 }
 
 function renderRanking() {
-  const completed = Object.values(progress.completed)
-    .filter((item) => item.passed)
-    .sort((a, b) => b.bestScore - a.bestScore);
+  const stats = getStats();
+  app.innerHTML = `
+    <div class="app-container">
+      ${renderTopBar()}
+      <header class="page-header"><div><h2>Meu desempenho</h2><p>Resumo do aluno atual.</p></div><button class="btn btn-light" data-action="go-home">Voltar</button></header>
+      <section class="stats-grid"><div class="stat-card"><strong>${stats.correct}</strong><span>Acertos</span></div><div class="stat-card"><strong>${stats.wrong}</strong><span>Erros</span></div><div class="stat-card"><strong>${stats.averageCorrect}</strong><span>Média de acertos</span></div></section>
+      <div class="actions" style="margin-top:18px;"><button class="btn btn-danger" data-action="reset-progress">Apagar meu progresso</button></div>
+    </div>
+  `;
+}
 
-  const list = completed.length
-    ? completed
-        .map((item) => {
-          const world = getWorldById(item.worldId);
-
-          return `
-            <div class="list-item">
-              <div>
-                <strong>${world.emoji} ${world.name} - Fase ${item.level}</strong>
-                <br />
-                <small>${renderStars(item.stars)} | ${item.bestCorrect}/10 acertos</small>
-              </div>
-
-              <strong>${item.bestScore} pts</strong>
-            </div>
-          `;
-        })
-        .join("")
-    : `<div class="empty">Você ainda não concluiu nenhuma fase.</div>`;
+function renderTeacherDashboard() {
+  const students = Object.values(data.students);
+  const totals = students.map((student) => ({ student, stats: getStats(student.progress) }));
+  const totalCorrect = totals.reduce((sum, item) => sum + item.stats.correct, 0);
+  const totalWrong = totals.reduce((sum, item) => sum + item.stats.wrong, 0);
+  const maxBar = Math.max(totalCorrect, totalWrong, 1);
 
   app.innerHTML = `
     <div class="app-container">
-      ${renderPlayerBar()}
-      <header class="page-header">
-        <div>
-          <h2>Meu desempenho</h2>
-          <p>Veja as melhores fases concluídas deste jogador.</p>
-        </div>
-
-        <button class="btn btn-light" data-action="go-home">Voltar</button>
-      </header>
-
-      <section class="list">
-        ${list}
-      </section>
-
-      <div class="actions" style="margin-top: 18px;">
-        <button class="btn btn-danger" data-action="reset-progress">
-          Apagar progresso deste jogador
-        </button>
-      </div>
+      ${renderTopBar()}
+      <header class="page-header"><div><h2>Painel do professor</h2><p>Desempenho dos alunos salvos neste navegador.</p></div><button class="btn btn-light" data-action="go-home">Voltar</button></header>
+      <section class="stats-grid"><div class="stat-card"><strong>${students.length}</strong><span>Alunos</span></div><div class="stat-card"><strong>${totalCorrect}</strong><span>Acertos totais</span></div><div class="stat-card"><strong>${totalWrong}</strong><span>Erros totais</span></div></section>
+      <section class="card chart-card"><h3>Gráfico geral</h3><div class="bar-row"><span>Acertos</span><div><b style="width:${(totalCorrect / maxBar) * 100}%"></b></div><strong>${totalCorrect}</strong></div><div class="bar-row wrong"><span>Erros</span><div><b style="width:${(totalWrong / maxBar) * 100}%"></b></div><strong>${totalWrong}</strong></div></section>
+      <section class="list">${totals.length ? totals.map(({ student, stats }) => `<div class="list-item"><div><strong>${student.fullName}</strong><br /><small>${stats.completedLevels}/${stats.totalLevels} fases • média ${stats.averageCorrect} acertos e ${stats.averageWrong} erros</small></div><strong>${stats.correct} acertos</strong></div>`).join("") : `<div class="empty">Nenhum aluno jogou ainda neste navegador.</div>`}</section>
     </div>
   `;
 }
@@ -1002,101 +537,75 @@ function render() {
   if (state.screen === "game") renderGame();
   if (state.screen === "result") renderResult();
   if (state.screen === "ranking") renderRanking();
+  if (state.screen === "teacher") renderTeacherDashboard();
 }
 
 app.addEventListener("submit", (event) => {
-  const form = event.target.closest("[data-form='player']");
+  const form = event.target.closest("[data-form='login']");
   if (!form) return;
-
   event.preventDefault();
-
   const formData = new FormData(form);
-  const fullName = String(formData.get("fullName") || "").trim();
+  const fullName = String(formData.get("fullName") || "").trim().replace(/\s+/g, " ");
+  const isTeacher = formData.get("isTeacher") === "on";
+  const birthDate = String(formData.get("birthDate") || "");
 
   if (fullName.length < 3) {
     state.loginError = "Preencha o nome completo.";
     render();
     return;
   }
+  if (isTeacher && !birthDate) {
+    state.loginMode = "teacher";
+    state.loginError = "Professor precisa informar a data de nascimento.";
+    render();
+    return;
+  }
 
-  createOrSelectPlayer(fullName);
-  state.loginError = "";
+  const id = isTeacher ? `${slug(fullName)}_${birthDate}` : slug(fullName);
+  const group = isTeacher ? data.teachers : data.students;
+  if (!group[id]) {
+    group[id] = { id, fullName, birthDate: isTeacher ? birthDate : null, progress: emptyProgress(), createdAt: new Date().toISOString() };
+  }
+  state.currentUserId = id;
+  state.role = isTeacher ? "teacher" : "student";
   state.screen = "home";
+  state.loginError = "";
+  saveData();
   render();
+});
+
+app.addEventListener("change", (event) => {
+  if (event.target.matches("[data-action='toggle-teacher']")) {
+    state.loginMode = event.target.checked ? "teacher" : "student";
+    state.loginError = "";
+    render();
+  }
 });
 
 app.addEventListener("click", (event) => {
   const element = event.target.closest("[data-action]");
   if (!element) return;
-
   const action = element.dataset.action;
 
-  if (action === "go-home") {
-    goTo("home");
-  }
-
-  if (action === "logout") {
-    logoutPlayer();
-  }
-
-  if (action === "select-player") {
-    setActivePlayer(element.dataset.player);
-    state.screen = "home";
-    render();
-  }
-
-  if (action === "go-worlds") {
-    state.screen = "worlds";
-    render();
-  }
-
-  if (action === "go-ranking") {
-    state.screen = "ranking";
-    render();
-  }
-
+  if (action === "go-home") state.screen = "home";
+  if (action === "go-worlds") state.screen = "worlds";
+  if (action === "go-ranking") state.screen = "ranking";
+  if (action === "teacher-dashboard") state.screen = "teacher";
+  if (action === "logout") state = { ...state, screen: "login", currentUserId: null, role: null, loginMode: "student" };
+  if (action === "set-difficulty") state.difficulty = element.dataset.difficulty;
   if (action === "select-world") {
     state.currentWorldId = element.dataset.world;
     state.screen = "levels";
-    render();
   }
-
-  if (action === "start-level") {
-    const worldId = element.dataset.world;
-    const level = Number(element.dataset.level);
-    startLevel(worldId, level);
-  }
-
-  if (action === "answer") {
-    answerQuestion(element.dataset.answer);
-  }
-
-  if (action === "next-question") {
-    nextQuestion();
-  }
-
-  if (action === "retry-level") {
-    startLevel(state.currentWorldId, state.currentLevel);
-  }
-
-  if (action === "next-level") {
-    startLevel(state.currentWorldId, state.currentLevel + 1);
-  }
-
-  if (action === "go-levels") {
-    state.screen = "levels";
-    render();
-  }
-
-  if (action === "continue") {
-    if (progress.lastPlayed) {
-      startLevel(progress.lastPlayed.worldId, progress.lastPlayed.level);
-    }
-  }
-
-  if (action === "reset-progress") {
-    resetProgress();
-  }
+  if (action === "start-level") startLevel(element.dataset.world, Number(element.dataset.level));
+  if (action === "answer") answerQuestion(element.dataset.answer);
+  if (action === "next-question") nextQuestion();
+  if (action === "retry-level") startLevel(state.currentWorldId, state.currentLevel);
+  if (action === "next-level") startLevel(state.currentWorldId, Math.min(LEVELS_PER_WORLD, state.currentLevel + 1));
+  if (action === "go-levels") state.screen = "levels";
+  if (action === "exit-level") exitLevel();
+  if (action === "reset-progress") resetProgress();
+  render();
 });
 
 render();
