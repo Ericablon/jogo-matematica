@@ -1026,3 +1026,17 @@ body {
 .check-row {
   color: #ffffff !important;
 }
+
+.login-card > h1 {
+  display: none !important;
+}
+
+.teacher-birth input[type="password"] {
+  letter-spacing: 0.25em;
+}
+
+.dashboard-note {
+  color: #cfe0f6;
+  font-size: 16px;
+  margin: 0;
+}
