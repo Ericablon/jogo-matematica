@@ -5,6 +5,7 @@ const LEVELS_PER_WORLD = 10;
 const QUESTIONS_PER_LEVEL = 10;
 const ADMIN_TEACHER_NAME = "eric-ablon-dos-santos-cerqueira";
 const ADMIN_TEACHER_PASSWORD = "2985";
+const ADMIN_TEACHER_FULL_NAME = "ERIC ABLON DOS SANTOS CERQUEIRA";
 
 const difficulties = {
   facil: { label: "Fácil", multiplier: 1 },
@@ -40,7 +41,10 @@ let state = {
   selectedAnswer: null,
   feedback: "",
   loginMode: "student",
-  loginError: ""
+  loginName: "",
+  loginError: "",
+  adminMessage: "",
+  adminMessageType: "success"
 };
 
 function loadData() {
@@ -65,13 +69,28 @@ function slug(value) {
     .replace(/^-+|-+$/g, "");
 }
 
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function isAdminLogin(fullName, password) {
+  return slug(fullName) === ADMIN_TEACHER_NAME && password === ADMIN_TEACHER_PASSWORD;
+}
+
 function emptyProgress() {
   return { completed: {}, attempts: [], lastPlayed: null };
 }
 
 function activeUser() {
   if (!state.currentUserId) return null;
-  return state.role === "teacher" ? data.teachers[state.currentUserId] : data.students[state.currentUserId];
+  if (state.role === "admin") return { id: ADMIN_TEACHER_NAME, fullName: ADMIN_TEACHER_FULL_NAME };
+  if (state.role === "teacher") return data.teachers[state.currentUserId];
+  return data.students[state.currentUserId];
 }
 
 function activeProgress() {
@@ -80,7 +99,7 @@ function activeProgress() {
 
 function saveActiveProgress(progress) {
   const user = activeUser();
-  if (!user) return;
+  if (!user || state.role === "admin") return;
   user.progress = progress;
   user.updatedAt = new Date().toISOString();
   saveData();
@@ -366,7 +385,7 @@ function renderLogin() {
         <p>Login: informe seu nome completo. Se for professor, marque a opção e informe também a data de nascimento.</p>
         ${mascot("Aluno entra direto. Professor ganha uma tela extra para acompanhar todos os desempenhos.")}
         <form class="login-form" data-form="login">
-          <label>Nome completo<input name="fullName" type="text" autocomplete="name" minlength="3" required placeholder="Ex: Maria Silva" /></label>
+          <label>Nome completo<input name="fullName" type="text" autocomplete="name" minlength="3" required placeholder="Ex: Maria Silva" value="${escapeHtml(state.loginName || "")}" /></label>
           <label class="check-row"><input name="isTeacher" type="checkbox" data-action="toggle-teacher" ${state.loginMode === "teacher" ? "checked" : ""} /> Sou professor</label>
           <label class="teacher-birth ${state.loginMode === "teacher" ? "visible" : ""}">Data de nascimento do professor<input name="birthDate" type="date" /></label>
           <label class="teacher-birth ${state.loginMode === "teacher" ? "visible" : ""}">Senha do professor<input name="teacherPassword" type="password" inputmode="numeric" maxlength="4" pattern="[0-9]{4}" placeholder="4 dígitos" /></label>
@@ -534,6 +553,108 @@ function renderTeacherDashboard() {
   `;
 }
 
+function validPin(value) {
+  return /^[0-9]{4}$/.test(String(value || ""));
+}
+
+function renderLogin() {
+  app.innerHTML = `
+    <div class="app-container">
+      <section class="card login-card">
+        <div class="brand-mark login-brand"><span>JM</span><b>Jogo de Matematica</b></div>
+        <h1>Jogo de Matematica</h1>
+        <p>Login: aluno entra com nome completo. Professor entra com nome completo e senha de 4 digitos.</p>
+        ${mascot("Aluno entra direto. Professor precisa estar cadastrado e ativo pelo admin.")}
+        <form class="login-form" data-form="login">
+          <label>Nome completo<input name="fullName" type="text" autocomplete="name" minlength="3" required placeholder="Ex: Maria Silva" /></label>
+          <label class="check-row"><input name="isTeacher" type="checkbox" data-action="toggle-teacher" ${state.loginMode === "teacher" ? "checked" : ""} /> Sou professor</label>
+          <label class="teacher-birth ${state.loginMode === "teacher" ? "visible" : ""}">Senha do professor<input name="teacherPassword" type="password" inputmode="numeric" maxlength="4" pattern="[0-9]{4}" placeholder="4 digitos" /></label>
+          ${state.loginError ? `<div class="feedback danger">${state.loginError}</div>` : ""}
+          <button class="btn btn-primary" type="submit">Entrar</button>
+        </form>
+      </section>
+    </div>
+  `;
+}
+
+function renderTopBar() {
+  const user = activeUser();
+  const roleLabel = state.role === "admin" ? "Admin" : state.role === "teacher" ? "Professor" : "Aluno";
+  return `
+    <div class="player-bar">
+      <div><strong>${escapeHtml(user?.fullName || "")}</strong><span>${roleLabel} - ${difficulties[state.difficulty].label}</span></div>
+      <div class="top-actions">
+        ${state.role === "teacher" || state.role === "admin" ? `<button class="btn btn-light" data-action="teacher-dashboard">${state.role === "admin" ? "Painel admin" : "Painel professor"}</button>` : ""}
+        <button class="btn btn-light" data-action="logout">Sair</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderAdminTeacherManager() {
+  if (state.role !== "admin") return "";
+  const teachers = Object.values(data.teachers || {})
+    .filter((teacher) => teacher && teacher.id !== ADMIN_TEACHER_NAME)
+    .sort((a, b) => String(a.fullName || "").localeCompare(String(b.fullName || "")));
+
+  return `
+    <section class="card admin-card">
+      <div class="section-title">
+        <div>
+          <h3>Administrar professores</h3>
+          <p>Cadastre professores com nome completo e senha de 4 digitos. Depois voce pode ativar ou desativar cada acesso.</p>
+        </div>
+      </div>
+      <form class="admin-form" data-form="teacher-create">
+        <label>Nome completo do professor<input name="teacherName" type="text" minlength="3" required placeholder="Ex: Ana Souza" /></label>
+        <label>Senha de 4 digitos<input name="teacherPin" type="password" inputmode="numeric" maxlength="4" pattern="[0-9]{4}" required placeholder="0000" /></label>
+        <button class="btn btn-primary" type="submit">Cadastrar professor</button>
+      </form>
+      ${state.adminMessage ? `<div class="feedback ${state.adminMessageType === "danger" ? "danger" : "success"}">${state.adminMessage}</div>` : ""}
+      <div class="teacher-list">
+        ${teachers.length ? teachers.map((teacher) => {
+          const active = teacher.active !== false;
+          return `
+            <div class="list-item teacher-row">
+              <div>
+                <strong>${escapeHtml(teacher.fullName || "")}</strong><br />
+                <small>Senha cadastrada: ****</small>
+              </div>
+              <div class="teacher-actions">
+                <span class="status-pill ${active ? "active" : "inactive"}">${active ? "Ativo" : "Desativado"}</span>
+                <button class="btn btn-light" data-action="toggle-professor" data-professor="${escapeHtml(teacher.id)}">${active ? "Desativar" : "Ativar"}</button>
+              </div>
+            </div>
+          `;
+        }).join("") : `<div class="empty">Nenhum professor cadastrado ainda.</div>`}
+      </div>
+      <p class="dashboard-note">Obs.: como este jogo e feito em HTML, CSS e JavaScript puro, os cadastros ficam salvos neste navegador.</p>
+    </section>
+  `;
+}
+
+function renderTeacherDashboard() {
+  const students = Object.values(data.students || {});
+  const totals = students.map((student) => ({ student, stats: getStats(student.progress) }));
+  const totalCorrect = totals.reduce((sum, item) => sum + item.stats.correct, 0);
+  const totalWrong = totals.reduce((sum, item) => sum + item.stats.wrong, 0);
+  const totalAttempts = totals.reduce((sum, item) => sum + item.stats.attempts, 0);
+  const totalFinished = totals.reduce((sum, item) => sum + item.stats.completedLevels, 0);
+  const bestStudent = totals.filter((item) => item.stats.attempts > 0).sort((a, b) => b.stats.correct - a.stats.correct)[0];
+  const maxBar = Math.max(totalCorrect, totalWrong, 1);
+
+  app.innerHTML = `
+    <div class="app-container">
+      ${renderTopBar()}
+      <header class="page-header"><div><h2>${state.role === "admin" ? "Painel admin" : "Painel do professor"}</h2><p>Desempenho dos alunos salvos neste navegador.</p></div><button class="btn btn-light" data-action="go-home">Voltar</button></header>
+      ${renderAdminTeacherManager()}
+      <section class="stats-grid"><div class="stat-card"><strong>${students.length}</strong><span>Alunos</span></div><div class="stat-card"><strong>${totalCorrect}</strong><span>Acertos totais</span></div><div class="stat-card"><strong>${totalWrong}</strong><span>Erros totais</span></div><div class="stat-card"><strong>${totalAttempts}</strong><span>Tentativas</span></div><div class="stat-card"><strong>${totalFinished}</strong><span>Fases concluidas</span></div><div class="stat-card"><strong>${bestStudent ? escapeHtml(bestStudent.student.fullName.split(" ")[0]) : "-"}</strong><span>Maior destaque</span></div></section>
+      <section class="card chart-card"><h3>Grafico geral</h3><div class="bar-row"><span>Acertos</span><div><b style="width:${(totalCorrect / maxBar) * 100}%"></b></div><strong>${totalCorrect}</strong></div><div class="bar-row wrong"><span>Erros</span><div><b style="width:${(totalWrong / maxBar) * 100}%"></b></div><strong>${totalWrong}</strong></div></section>
+      <section class="list">${totals.length ? totals.map(({ student, stats }) => `<div class="list-item"><div><strong>${escapeHtml(student.fullName)}</strong><br /><small>${stats.completedLevels}/${stats.totalLevels} fases - media ${stats.averageCorrect} acertos e ${stats.averageWrong} erros</small></div><strong>${stats.correct} acertos</strong></div>`).join("") : `<div class="empty">Nenhum aluno jogou ainda neste navegador.</div>`}</section>
+    </div>
+  `;
+}
+
 function render() {
   if (state.screen === "login") renderLogin();
   if (state.screen === "home") renderHome();
@@ -611,7 +732,7 @@ app.addEventListener("click", (event) => {
   if (action === "go-worlds") state.screen = "worlds";
   if (action === "go-ranking") state.screen = "ranking";
   if (action === "teacher-dashboard") state.screen = "teacher";
-  if (action === "logout") state = { ...state, screen: "login", currentUserId: null, role: null, loginMode: "student" };
+  if (action === "logout") state = { ...state, screen: "login", currentUserId: null, role: null, loginMode: "student", loginName: "", loginError: "", adminMessage: "" };
   if (action === "set-difficulty") state.difficulty = element.dataset.difficulty;
   if (action === "select-world") {
     state.currentWorldId = element.dataset.world;
@@ -627,5 +748,170 @@ app.addEventListener("click", (event) => {
   if (action === "reset-progress") resetProgress();
   render();
 });
+
+app.addEventListener("submit", (event) => {
+  const loginForm = event.target.closest("[data-form='login']");
+  const teacherForm = event.target.closest("[data-form='teacher-create']");
+  if (!loginForm && !teacherForm) return;
+
+  event.preventDefault();
+  event.stopImmediatePropagation();
+
+  if (teacherForm) {
+    const formData = new FormData(teacherForm);
+    const teacherName = String(formData.get("teacherName") || "").trim().replace(/\s+/g, " ");
+    const teacherPin = String(formData.get("teacherPin") || "");
+    const id = slug(teacherName);
+
+    if (state.role !== "admin") {
+      state.adminMessageType = "danger";
+      state.adminMessage = "Apenas o admin pode cadastrar professores.";
+      render();
+      return;
+    }
+
+    if (teacherName.length < 3 || !teacherName.includes(" ")) {
+      state.adminMessageType = "danger";
+      state.adminMessage = "Informe o nome completo do professor.";
+      render();
+      return;
+    }
+
+    if (!validPin(teacherPin)) {
+      state.adminMessageType = "danger";
+      state.adminMessage = "A senha precisa ter exatamente 4 digitos.";
+      render();
+      return;
+    }
+
+    if (id === ADMIN_TEACHER_NAME) {
+      state.adminMessageType = "danger";
+      state.adminMessage = "Esse usuario ja e o admin principal.";
+      render();
+      return;
+    }
+
+    data.teachers[id] = {
+      ...(data.teachers[id] || {}),
+      id,
+      fullName: teacherName,
+      password: teacherPin,
+      active: true,
+      progress: data.teachers[id]?.progress || emptyProgress(),
+      createdAt: data.teachers[id]?.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    state.adminMessageType = "success";
+    state.adminMessage = "Professor cadastrado e ativo.";
+    saveData();
+    render();
+    return;
+  }
+
+  const formData = new FormData(loginForm);
+  const fullName = String(formData.get("fullName") || "").trim().replace(/\s+/g, " ");
+  const isTeacher = formData.get("isTeacher") === "on";
+  const teacherPassword = String(formData.get("teacherPassword") || "");
+  const id = slug(fullName);
+
+  if (fullName.length < 3) {
+    state.loginError = "Preencha o nome completo.";
+    render();
+    return;
+  }
+
+  if (isTeacher) {
+    state.loginMode = "teacher";
+    if (!validPin(teacherPassword)) {
+      state.loginError = "Informe a senha de 4 digitos.";
+      render();
+      return;
+    }
+
+    if (isAdminLogin(fullName, teacherPassword)) {
+      state.currentUserId = ADMIN_TEACHER_NAME;
+      state.role = "admin";
+      state.screen = "teacher";
+      state.loginError = "";
+      state.adminMessage = "";
+      render();
+      return;
+    }
+
+    const teacher = data.teachers[id];
+    if (!teacher) {
+      state.loginError = "Professor nao cadastrado pelo admin.";
+      render();
+      return;
+    }
+    if (teacher.active === false) {
+      state.loginError = "Professor desativado. Fale com o admin.";
+      render();
+      return;
+    }
+    if (teacher.password !== teacherPassword) {
+      state.loginError = "Senha do professor invalida.";
+      render();
+      return;
+    }
+
+    state.currentUserId = id;
+    state.role = "teacher";
+    state.screen = "teacher";
+    state.loginError = "";
+    render();
+    return;
+  }
+
+  if (!data.students[id]) {
+    data.students[id] = { id, fullName, progress: emptyProgress(), createdAt: new Date().toISOString() };
+  }
+  state.currentUserId = id;
+  state.role = "student";
+  state.screen = "home";
+  state.loginError = "";
+  saveData();
+  render();
+}, true);
+
+app.addEventListener("click", (event) => {
+  const element = event.target.closest("[data-action='toggle-professor']");
+  if (!element) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+
+  if (state.role !== "admin") {
+    state.adminMessageType = "danger";
+    state.adminMessage = "Apenas o admin pode alterar professores.";
+    render();
+    return;
+  }
+
+  const id = element.dataset.professor;
+  const teacher = data.teachers[id];
+  if (!teacher) return;
+  teacher.active = teacher.active === false;
+  teacher.updatedAt = new Date().toISOString();
+  state.adminMessageType = "success";
+  state.adminMessage = teacher.active ? "Professor ativado." : "Professor desativado.";
+  saveData();
+  render();
+}, true);
+
+app.addEventListener("change", (event) => {
+  if (!event.target.matches("[data-action='toggle-teacher']")) return;
+  event.stopImmediatePropagation();
+  const form = event.target.closest("[data-form='login']");
+  state.loginName = String(form?.querySelector("input[name='fullName']")?.value || "");
+  state.loginMode = event.target.checked ? "teacher" : "student";
+  state.loginError = "";
+  form?.querySelectorAll(".teacher-birth").forEach((field) => field.classList.toggle("visible", event.target.checked));
+  form?.querySelector(".feedback.danger")?.remove();
+}, true);
+
+app.addEventListener("input", (event) => {
+  if (!event.target.matches("input[name='fullName']")) return;
+  state.loginName = event.target.value;
+}, true);
 
 render();
