@@ -2,8 +2,8 @@
 // Copie a Project URL e a chave anon/publishable em:
 // Supabase > Project Settings > API
 
-const SUPABASE_URL = "COLE_AQUI_A_URL_DO_NOVO_PROJETO";
-const SUPABASE_ANON_KEY = "COLE_AQUI_A_CHAVE_ANON_DO_NOVO_PROJETO";
+const SUPABASE_URL = "https://ajxrdhnrprocuzhafzhq.supabase.co/rest/v1/";
+const SUPABASE_ANON_KEY = "sb_publishable_bH-T8AYiz_ups3QCj22Q9A_myJcyppH";
 
 window.SUPABASE_URL = SUPABASE_URL;
 window.SUPABASE_ANON_KEY = SUPABASE_ANON_KEY;
