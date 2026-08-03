@@ -54,6 +54,12 @@ let state = {
   attemptStartedAt: null,
   teacherSelectedStudentId: null,
   teacherAnswerFilter: "all",
+  teacherTab: "overview",
+  teacherOperationFilter: "all",
+  teacherDifficultyFilter: "all",
+  teacherStudentFilter: "all",
+  teacherSearch: "",
+  tutorAutoPlay: false,
   staffToken: null,
   staffFullName: ""
 };
@@ -616,6 +622,7 @@ function answerQuestion(answer) {
     if (["facil", "media"].includes(state.difficulty)) {
       state.tutorOpen = true;
       state.tutorStep = 0;
+      state.tutorAutoPlay = true;
     }
   }
 
@@ -636,6 +643,7 @@ function nextQuestion() {
   state.feedback = "";
   state.tutorOpen = false;
   state.tutorStep = 0;
+  state.tutorAutoPlay = false;
   state.tutorUsedOnQuestion = false;
   state.tutorMaxStep = -1;
   render();
@@ -707,7 +715,24 @@ function tutorDigits(value, width) {
   return String(Math.max(0, Number(value) || 0)).padStart(width, " ").split("");
 }
 
-function renderTutorDigitRow({ label = "", value = "", width, activeColumn = -1, revealed = null, symbol = "", className = "" }) {
+function placeName(column, width) {
+  const distance = width - 1 - column;
+  return distance === 0 ? "unidades" : distance === 1 ? "dezenas" : distance === 2 ? "centenas" : distance === 3 ? "milhares" : "próxima casa";
+}
+
+function renderTutorDigitRow({
+  label = "",
+  value = "",
+  width,
+  activeColumn = -1,
+  revealed = null,
+  visibleColumns = null,
+  symbol = "",
+  className = "",
+  placingColumn = -1,
+  flyingDigit = "",
+  pointerText = ""
+}) {
   const chars = String(value).padStart(width, " ").split("");
   return `
     <div class="tutor-math-row ${className}">
@@ -715,41 +740,131 @@ function renderTutorDigitRow({ label = "", value = "", width, activeColumn = -1,
       <span class="tutor-row-symbol">${escapeHtml(symbol)}</span>
       <span class="tutor-digit-grid" style="--digit-count:${width}">
         ${chars.map((char, index) => {
-          const visible = !revealed || revealed[index] !== false;
-          const display = visible ? (char === " " ? "" : char) : "";
-          return `<span class="tutor-digit-cell ${index === activeColumn ? "active" : ""} ${display ? "filled" : "empty"}">${display}</span>`;
+          const allowedByReveal = !revealed || revealed[index] !== false;
+          const allowedByColumns = !visibleColumns || visibleColumns.includes(index);
+          const visible = allowedByReveal && allowedByColumns;
+          const isPlacing = index === placingColumn;
+          const display = visible && !isPlacing ? (char === " " ? "" : char) : "";
+          const placementDigit = String(flyingDigit || char || "").trim();
+          return `<span class="tutor-digit-cell ${index === activeColumn ? "active" : ""} ${isPlacing ? "placing" : ""} ${display ? "filled" : "empty"}">
+            ${display}
+            ${isPlacing && placementDigit ? `<span class="flying-digit">${escapeHtml(placementDigit)}</span>` : ""}
+            ${index === activeColumn && pointerText ? `<span class="tutor-point-marker"><b>👇</b><small>${escapeHtml(pointerText)}</small></span>` : ""}
+          </span>`;
         }).join("")}
       </span>
     </div>
   `;
 }
 
-function renderColumnWorkspace({ top, bottom, symbol, result, activeColumn = -1, revealedResult = [], note = "", carry = "" }) {
+function renderColumnWorkspace({
+  top,
+  bottom,
+  symbol,
+  result,
+  activeColumn = -1,
+  revealedResult = [],
+  visibleBottomColumns = null,
+  placingBottomColumn = -1,
+  flyingBottomDigit = "",
+  placingResultColumn = -1,
+  flyingResultDigit = "",
+  note = "",
+  carry = "",
+  pointerText = "Aqui"
+}) {
   const width = Math.max(String(top).length, String(bottom).length, String(result).length);
   const resultChars = tutorDigits(result, width);
   const revealMap = resultChars.map((char, index) => char === " " || revealedResult.includes(index));
   return `
     <div class="tutor-column-workspace">
-      ${carry ? `<div class="tutor-carry-note">${carry}</div>` : ""}
+      ${carry ? `<div class="tutor-carry-note"><span>↖</span>${escapeHtml(carry)}</div>` : ""}
       ${renderTutorDigitRow({ label: "1º número", value: top, width, activeColumn })}
-      ${renderTutorDigitRow({ label: "2º número", value: bottom, width, activeColumn, symbol })}
+      ${renderTutorDigitRow({
+        label: "2º número",
+        value: bottom,
+        width,
+        activeColumn,
+        visibleColumns: visibleBottomColumns,
+        placingColumn: placingBottomColumn,
+        flyingDigit: flyingBottomDigit,
+        pointerText: placingBottomColumn >= 0 ? pointerText : "",
+        symbol
+      })}
       <div class="tutor-math-line"></div>
-      ${renderTutorDigitRow({ label: "resultado", value: result, width, activeColumn, revealed: revealMap, className: "result-row" })}
-      ${note ? `<div class="tutor-placement-note">${note}</div>` : ""}
+      ${renderTutorDigitRow({
+        label: "resultado",
+        value: result,
+        width,
+        activeColumn,
+        revealed: revealMap,
+        placingColumn: placingResultColumn,
+        flyingDigit: flyingResultDigit,
+        pointerText: placingResultColumn >= 0 ? pointerText : "",
+        className: "result-row"
+      })}
+      ${note ? `<div class="tutor-placement-note"><span class="note-hand">☝️</span>${escapeHtml(note)}</div>` : ""}
     </div>
   `;
 }
 
+function buildAlignmentSteps(a, b, symbol, result, operationLabel) {
+  const width = Math.max(String(a).length, String(b).length, String(result).length);
+  const topChars = tutorDigits(a, width);
+  const bottomChars = tutorDigits(b, width);
+  const placed = [];
+  const steps = [{
+    title: `Vamos montar a ${operationLabel}`,
+    cue: "Primeiro organize as casas",
+    speech: "Antes de calcular, vamos encaixar cada algarismo na coluna correta. Unidade fica embaixo de unidade, dezena embaixo de dezena.",
+    visual: renderColumnWorkspace({
+      top: a,
+      bottom: b,
+      symbol,
+      result,
+      activeColumn: width - 1,
+      revealedResult: [],
+      visibleBottomColumns: [],
+      note: "Observe as colunas. O robô vai colocar o número de baixo, um algarismo por vez."
+    })
+  }];
+
+  for (let column = width - 1; column >= 0; column -= 1) {
+    const digit = bottomChars[column];
+    if (!digit || digit === " ") continue;
+    const topDigit = topChars[column] && topChars[column] !== " " ? topChars[column] : "a mesma casa";
+    const place = placeName(column, width);
+    steps.push({
+      title: `Coloque o ${digit} nas ${place}`,
+      cue: `${digit} fica nesta coluna`,
+      speech: `Este ${digit} pertence à casa das ${place}. Coloque-o exatamente embaixo do ${topDigit}. Veja o algarismo descendo até o lugar certo.`,
+      visual: renderColumnWorkspace({
+        top: a,
+        bottom: b,
+        symbol,
+        result,
+        activeColumn: column,
+        revealedResult: [],
+        visibleBottomColumns: [...placed],
+        placingBottomColumn: column,
+        flyingBottomDigit: digit,
+        pointerText: `Ponha o ${digit} aqui`,
+        note: `O ${digit} está sendo colocado na coluna das ${place}.`
+      })
+    });
+    placed.push(column);
+  }
+
+  return { steps, width, placed };
+}
+
 function buildAdditionLesson(a, b, question) {
-  const width = Math.max(String(a).length, String(b).length, String(question.correct).length);
+  const alignment = buildAlignmentSteps(a, b, "+", question.correct, "soma");
+  const width = alignment.width;
   const top = tutorDigits(a, width).map((d) => Number(d || 0));
   const bottom = tutorDigits(b, width).map((d) => Number(d || 0));
   const revealed = [];
-  const steps = [{
-    title: "Alinhe os números",
-    speech: "Coloque unidade embaixo de unidade, dezena embaixo de dezena e assim por diante. A conta sempre começa pela coluna da direita.",
-    visual: renderColumnWorkspace({ top: a, bottom: b, symbol: "+", result: question.correct, activeColumn: width - 1, revealedResult: [], note: "A seta amarela mostra a primeira coluna que vamos resolver." })
-  }];
+  const steps = [...alignment.steps];
 
   let carry = 0;
   for (let col = width - 1; col >= 0; col -= 1) {
@@ -757,34 +872,45 @@ function buildAdditionLesson(a, b, question) {
     const total = top[col] + bottom[col] + previousCarry;
     const digit = total % 10;
     carry = Math.floor(total / 10);
-    revealed.push(col);
-    const place = col === width - 1 ? "unidades" : col === width - 2 ? "dezenas" : col === width - 3 ? "centenas" : "próxima casa";
-    const carryText = carry ? `Como ${total} tem dois algarismos, escreva ${digit} embaixo e leve ${carry} para a coluna à esquerda.` : `Escreva ${digit} exatamente embaixo da coluna das ${place}.`;
+    const place = placeName(col, width);
     steps.push({
-      title: `Resolva as ${place}`,
-      speech: `${top[col]} + ${bottom[col]}${previousCarry ? ` + ${previousCarry} que veio` : ""} = ${total}. ${carryText}`,
-      visual: renderColumnWorkspace({ top: a, bottom: b, symbol: "+", result: question.correct, activeColumn: col, revealedResult: [...revealed], carry: previousCarry ? `Número que veio da coluna anterior: ${previousCarry}` : "", note: `O ${digit} fica na casa destacada.` })
+      title: `Some as ${place}`,
+      cue: `Escreva ${digit} embaixo`,
+      speech: `${top[col]} + ${bottom[col]}${previousCarry ? ` + ${previousCarry} que veio` : ""} = ${total}. ${carry ? `Escreva ${digit} nesta coluna e leve ${carry} para a esquerda.` : `Agora coloque ${digit} embaixo desta coluna.`}`,
+      visual: renderColumnWorkspace({
+        top: a,
+        bottom: b,
+        symbol: "+",
+        result: question.correct,
+        activeColumn: col,
+        revealedResult: [...revealed],
+        visibleBottomColumns: alignment.placed,
+        placingResultColumn: col,
+        flyingResultDigit: digit,
+        carry: previousCarry ? `Use também o ${previousCarry} que veio da coluna anterior.` : "",
+        pointerText: `Resultado ${digit} aqui`,
+        note: `O ${digit} desce para a casa das ${place}.`
+      })
     });
+    revealed.push(col);
   }
 
   steps.push({
     title: "Conta montada",
-    speech: `Pronto! Cada algarismo foi colocado em sua coluna. O resultado é ${question.correct}.`,
-    visual: renderColumnWorkspace({ top: a, bottom: b, symbol: "+", result: question.correct, activeColumn: -1, revealedResult: Array.from({ length: width }, (_, index) => index), note: "Confira da direita para a esquerda antes de marcar a resposta." })
+    cue: `Resultado: ${question.correct}`,
+    speech: `Pronto! O robô alinhou os números e montou o resultado ${question.correct}. Confira as colunas da direita para a esquerda.`,
+    visual: renderColumnWorkspace({ top: a, bottom: b, symbol: "+", result: question.correct, activeColumn: -1, revealedResult: Array.from({ length: width }, (_, index) => index), visibleBottomColumns: alignment.placed, note: "Conta completa. Agora tente reconhecer o mesmo caminho sozinho." })
   });
   return steps;
 }
 
 function buildSubtractionLesson(a, b, question) {
-  const width = Math.max(String(a).length, String(b).length, String(question.correct).length);
+  const alignment = buildAlignmentSteps(a, b, "−", question.correct, "subtração");
+  const width = alignment.width;
   const workingTop = tutorDigits(a, width).map((d) => Number(d || 0));
   const bottom = tutorDigits(b, width).map((d) => Number(d || 0));
   const revealed = [];
-  const steps = [{
-    title: "Alinhe a subtração",
-    speech: "Coloque unidade embaixo de unidade. O número maior fica em cima e começamos pela coluna da direita.",
-    visual: renderColumnWorkspace({ top: a, bottom: b, symbol: "−", result: question.correct, activeColumn: width - 1, revealedResult: [], note: "Comece na coluna destacada." })
-  }];
+  const steps = [...alignment.steps];
 
   for (let col = width - 1; col >= 0; col -= 1) {
     let upper = workingTop[col];
@@ -798,82 +924,118 @@ function buildSubtractionLesson(a, b, question) {
         for (let i = lender + 1; i < col; i += 1) workingTop[i] = 9;
         workingTop[col] += 10;
         upper = workingTop[col];
-        borrowMessage = `Como ${upper - 10} é menor que ${lower}, pegue 1 emprestado da coluna à esquerda. Agora temos ${upper}.`;
+        borrowMessage = `O número de cima era menor. Pegamos 1 emprestado da coluna à esquerda e agora temos ${upper}.`;
       }
     }
     const digit = upper - lower;
-    revealed.push(col);
-    const place = col === width - 1 ? "unidades" : col === width - 2 ? "dezenas" : col === width - 3 ? "centenas" : "próxima casa";
+    const place = placeName(col, width);
     steps.push({
       title: `Subtraia as ${place}`,
-      speech: `${borrowMessage} ${upper} − ${lower} = ${digit}. Escreva ${digit} embaixo dessa coluna.`,
-      visual: renderColumnWorkspace({ top: a, bottom: b, symbol: "−", result: question.correct, activeColumn: col, revealedResult: [...revealed], carry: borrowMessage ? "Empréstimo feito da coluna à esquerda" : "", note: `O ${digit} fica na casa destacada.` })
+      cue: `Coloque ${digit} embaixo`,
+      speech: `${borrowMessage} ${upper} − ${lower} = ${digit}. Veja onde o ${digit} deve ser escrito.`,
+      visual: renderColumnWorkspace({
+        top: a,
+        bottom: b,
+        symbol: "−",
+        result: question.correct,
+        activeColumn: col,
+        revealedResult: [...revealed],
+        visibleBottomColumns: alignment.placed,
+        placingResultColumn: col,
+        flyingResultDigit: digit,
+        carry: borrowMessage ? "Empréstimo vindo da coluna à esquerda." : "",
+        pointerText: `Escreva ${digit} aqui`,
+        note: `O ${digit} fica na coluna das ${place}.`
+      })
     });
+    revealed.push(col);
   }
 
   steps.push({
-    title: "Conta montada",
-    speech: `Terminamos da direita para a esquerda. O resultado é ${question.correct}.`,
-    visual: renderColumnWorkspace({ top: a, bottom: b, symbol: "−", result: question.correct, activeColumn: -1, revealedResult: Array.from({ length: width }, (_, index) => index), note: "Agora confira se cada algarismo está na coluna certa." })
+    title: "Subtração concluída",
+    cue: `Resultado: ${question.correct}`,
+    speech: `Terminamos a conta coluna por coluna. O resultado é ${question.correct}.`,
+    visual: renderColumnWorkspace({ top: a, bottom: b, symbol: "−", result: question.correct, activeColumn: -1, revealedResult: Array.from({ length: width }, (_, index) => index), visibleBottomColumns: alignment.placed, note: "Confira se cada número ficou na casa certa." })
   });
   return steps;
 }
 
-function renderMultiplicationWorkspace(a, b, partials = [], activeRow = -1, showResult = false, result = "") {
+function renderMultiplicationWorkspace(a, b, partials = [], activeRow = -1, showResult = false, result = "", visibleBottomColumns = null, placingBottomColumn = -1, flyingBottomDigit = "") {
   const width = Math.max(String(result || a * b).length, String(a).length, String(b).length) + 1;
   return `
     <div class="tutor-column-workspace multiplication-workspace">
       ${renderTutorDigitRow({ label: "multiplicando", value: a, width })}
-      ${renderTutorDigitRow({ label: "multiplicador", value: b, width, symbol: "×" })}
+      ${renderTutorDigitRow({ label: "multiplicador", value: b, width, symbol: "×", visibleColumns: visibleBottomColumns, placingColumn: placingBottomColumn, flyingDigit: flyingBottomDigit, activeColumn: placingBottomColumn, pointerText: placingBottomColumn >= 0 ? "Coloque aqui" : "" })}
       <div class="tutor-math-line"></div>
-      ${partials.map((partial, index) => renderTutorDigitRow({ label: `parcial ${index + 1}`, value: partial, width, activeColumn: index === activeRow ? width - 1 - index : -1, className: index === activeRow ? "active-row" : "" })).join("")}
-      ${showResult ? `<div class="tutor-math-line secondary-line"></div>${renderTutorDigitRow({ label: "resultado", value: result, width, className: "result-row" })}` : ""}
-      <div class="tutor-placement-note">Cada nova linha parcial começa uma casa mais à esquerda.</div>
+      ${partials.map((partial, index) => renderTutorDigitRow({ label: `parcial ${index + 1}`, value: partial, width, activeColumn: index === activeRow ? width - 1 - index : -1, className: index === activeRow ? "active-row placing-row" : "" })).join("")}
+      ${showResult ? `<div class="tutor-math-line secondary-line"></div>${renderTutorDigitRow({ label: "resultado", value: result, width, className: "result-row final-result-row" })}` : ""}
+      <div class="tutor-placement-note"><span class="note-hand">☝️</span>Cada nova linha parcial começa uma casa mais à esquerda.</div>
     </div>
   `;
 }
 
 function buildMultiplicationLesson(a, b, question) {
-  const multiplierDigits = String(b).split("").reverse().map(Number);
-  const partials = [];
+  const width = Math.max(String(question.correct).length, String(a).length, String(b).length) + 1;
+  const bottomChars = String(b).padStart(width, " ").split("");
+  const placed = [];
   const steps = [{
     title: "Monte a multiplicação",
-    speech: "Alinhe os números pela direita. O sinal de multiplicação fica ao lado do número de baixo.",
-    visual: renderMultiplicationWorkspace(a, b, [], -1, false, question.correct)
+    cue: "Alinhe pela direita",
+    speech: "Vamos colocar o multiplicador embaixo do multiplicando. Começamos pelas unidades, sempre alinhando pela direita.",
+    visual: renderMultiplicationWorkspace(a, b, [], -1, false, question.correct, [])
   }];
 
+  for (let col = width - 1; col >= 0; col -= 1) {
+    const digit = bottomChars[col];
+    if (!digit || digit === " ") continue;
+    steps.push({
+      title: `Posicione o ${digit}`,
+      cue: `${digit} entra nesta coluna`,
+      speech: `Coloque o ${digit} na casa das ${placeName(col, width)}. Veja o robô apontando o encaixe.`,
+      visual: renderMultiplicationWorkspace(a, b, [], -1, false, question.correct, [...placed], col, digit)
+    });
+    placed.push(col);
+  }
+
+  const multiplierDigits = String(b).split("").reverse().map(Number);
+  const partials = [];
   multiplierDigits.forEach((digit, index) => {
     const partial = a * digit * (10 ** index);
     partials.push(partial);
     steps.push({
-      title: `Faça a ${index + 1}ª linha`,
-      speech: `Multiplique ${a} por ${digit}. ${index > 0 ? `Como esse ${digit} está na casa das ${index === 1 ? "dezenas" : "centenas"}, a linha começa ${index} casa(s) para a esquerda.` : "A primeira linha começa na casa das unidades."}`,
-      visual: renderMultiplicationWorkspace(a, b, [...partials], index, false, question.correct)
+      title: `Monte a ${index + 1}ª linha`,
+      cue: `Linha parcial: ${partial}`,
+      speech: `Multiplique ${a} por ${digit}. ${index > 0 ? `Como o ${digit} está mais à esquerda, deslocamos a linha ${index} casa(s).` : "A primeira linha começa nas unidades."}`,
+      visual: renderMultiplicationWorkspace(a, b, [...partials], index, false, question.correct, placed)
     });
   });
 
   steps.push({
     title: "Some as linhas parciais",
-    speech: `Agora some as linhas mantendo cada algarismo em sua coluna. O resultado é ${question.correct}.`,
-    visual: renderMultiplicationWorkspace(a, b, partials, -1, true, question.correct)
+    cue: `Resultado: ${question.correct}`,
+    speech: `Agora some as linhas mantendo as colunas alinhadas. O resultado final é ${question.correct}.`,
+    visual: renderMultiplicationWorkspace(a, b, partials, -1, true, question.correct, placed)
   });
   return steps;
 }
 
-function renderDivisionWorkspace(total, divisor, quotientSlots, activeIndex = -1, note = "") {
+function renderDivisionWorkspace(total, divisor, quotientSlots, activeIndex = -1, note = "", placingIndex = -1, placingDigit = "") {
   const digits = String(total).split("");
   return `
     <div class="division-workspace">
       <div class="division-quotient" style="--digit-count:${digits.length}">
-        ${digits.map((_, index) => `<span class="tutor-digit-cell ${index === activeIndex ? "active" : ""} ${quotientSlots[index] !== "" ? "filled" : "empty"}">${quotientSlots[index] ?? ""}</span>`).join("")}
+        ${digits.map((_, index) => `<span class="tutor-digit-cell ${index === activeIndex ? "active" : ""} ${index === placingIndex ? "placing" : ""} ${quotientSlots[index] !== "" ? "filled" : "empty"}">
+          ${index === placingIndex ? `<span class="flying-digit quotient-digit">${escapeHtml(String(placingDigit))}</span>` : (quotientSlots[index] ?? "")}
+          ${index === activeIndex ? `<span class="tutor-point-marker division-marker"><b>👇</b><small>Escreva aqui</small></span>` : ""}
+        </span>`).join("")}
       </div>
       <div class="division-body">
-        <div class="division-divisor">${divisor}</div>
+        <div class="division-divisor"><span class="divisor-badge">${divisor}</span></div>
         <div class="division-dividend" style="--digit-count:${digits.length}">
           ${digits.map((digit, index) => `<span class="tutor-digit-cell ${index === activeIndex ? "active" : ""}">${digit}</span>`).join("")}
         </div>
       </div>
-      <div class="tutor-placement-note">${note || "O resultado é escrito em cima do algarismo que está sendo usado."}</div>
+      <div class="tutor-placement-note"><span class="note-hand">☝️</span>${escapeHtml(note || "O resultado é escrito em cima do algarismo usado.")}</div>
     </div>
   `;
 }
@@ -883,8 +1045,9 @@ function buildDivisionLesson(total, divisor, question) {
   const quotientSlots = Array(digits.length).fill("");
   const steps = [{
     title: "Monte a divisão",
-    speech: `O ${divisor} fica do lado de fora e o ${total} fica dentro. O resultado será escrito em cima, coluna por coluna.`,
-    visual: renderDivisionWorkspace(total, divisor, quotientSlots, 0)
+    cue: `${divisor} fica do lado de fora`,
+    speech: `Coloque ${total} dentro da chave e ${divisor} do lado de fora. O resultado será montado em cima, algarismo por algarismo.`,
+    visual: renderDivisionWorkspace(total, divisor, quotientSlots, 0, "O robô começa pelo primeiro algarismo da esquerda.")
   }];
 
   let current = 0;
@@ -894,26 +1057,29 @@ function buildDivisionLesson(total, divisor, question) {
     if (current < divisor && index < digits.length - 1 && !quotientStarted) {
       steps.push({
         title: "Junte o próximo algarismo",
-        speech: `${current} é menor que ${divisor}, então ainda não dá para dividir. Junte o próximo algarismo à direita.`,
-        visual: renderDivisionWorkspace(total, divisor, [...quotientSlots], index, `Ainda não escrevemos nada em cima desta coluna.`)
+        cue: "Ainda não cabe",
+        speech: `${current} é menor que ${divisor}. Então junte o próximo algarismo à direita antes de dividir.`,
+        visual: renderDivisionWorkspace(total, divisor, [...quotientSlots], index, "Ainda não escrevemos nada em cima desta coluna.")
       });
       return;
     }
     const quotientDigit = Math.floor(current / divisor);
     const remainder = current % divisor;
+    steps.push({
+      title: `Coloque ${quotientDigit} no quociente`,
+      cue: `${quotientDigit} vai aqui em cima`,
+      speech: `${divisor} cabe ${quotientDigit} vez(es) em ${current}, porque ${divisor} × ${quotientDigit} = ${divisor * quotientDigit}. Veja o ${quotientDigit} entrando no lugar certo. Sobra ${remainder}.`,
+      visual: renderDivisionWorkspace(total, divisor, [...quotientSlots], index, `O ${quotientDigit} fica exatamente em cima da coluna destacada.`, index, quotientDigit)
+    });
     quotientSlots[index] = String(quotientDigit);
     quotientStarted = true;
-    steps.push({
-      title: `Escreva ${quotientDigit} em cima`,
-      speech: `${divisor} cabe ${quotientDigit} vez(es) em ${current}, porque ${divisor} × ${quotientDigit} = ${divisor * quotientDigit}. Escreva ${quotientDigit} em cima desta coluna. Sobra ${remainder}.`,
-      visual: renderDivisionWorkspace(total, divisor, [...quotientSlots], index, `O ${quotientDigit} fica exatamente em cima do algarismo destacado.`)
-    });
     current = remainder;
   });
 
   steps.push({
     title: "Divisão concluída",
-    speech: `Lendo os números escritos em cima, encontramos ${question.correct}. Como a divisão é exata, a sobra final é zero.`,
+    cue: `Resultado: ${question.correct}`,
+    speech: `Lendo os algarismos montados em cima, encontramos ${question.correct}.`,
     visual: renderDivisionWorkspace(total, divisor, quotientSlots, -1, `Resultado final: ${question.correct}`)
   });
   return steps;
@@ -923,7 +1089,7 @@ function renderMixedWorkspace(expression, activePart, replacement = "", result =
   return `
     <div class="mixed-workspace">
       <div class="mixed-expression">${expression.split(" ").map((part, index) => `<span class="${index === activePart ? "active" : ""}">${escapeHtml(part)}</span>`).join(" ")}</div>
-      ${replacement ? `<div class="mixed-arrow">↓</div><div class="mixed-replacement">${replacement}</div>` : ""}
+      ${replacement ? `<div class="mixed-arrow">↓</div><div class="mixed-replacement animated-replacement">${replacement}</div>` : ""}
       ${result ? `<div class="mixed-result">Resultado: <strong>${result}</strong></div>` : ""}
     </div>
   `;
@@ -941,24 +1107,24 @@ function buildTutorLesson(question) {
     const [a, b, c] = values;
     const product = a * b;
     return [
-      { title: "Veja a ordem", speech: "Multiplicação vem antes da soma. Vamos resolver primeiro a parte destacada.", visual: renderMixedWorkspace(`${a} × ${b} + ${c}`, 1) },
-      { title: "Resolva a multiplicação", speech: `${a} × ${b} = ${product}. Substitua a multiplicação por esse resultado.`, visual: renderMixedWorkspace(`${a} × ${b} + ${c}`, 1, `${product} + ${c}`) },
-      { title: "Faça a soma", speech: `${product} + ${c} = ${question.correct}.`, visual: renderMixedWorkspace(`${a} × ${b} + ${c}`, -1, `${product} + ${c}`, question.correct) }
+      { title: "Veja a ordem", cue: "Multiplicação primeiro", speech: "Multiplicação vem antes da soma. O robô aponta primeiro para a parte que deve ser resolvida.", visual: renderMixedWorkspace(`${a} × ${b} + ${c}`, 1) },
+      { title: "Resolva a multiplicação", cue: `${a} × ${b} = ${product}`, speech: `${a} × ${b} = ${product}. Agora esse resultado entra no lugar da multiplicação.`, visual: renderMixedWorkspace(`${a} × ${b} + ${c}`, 1, `${product} + ${c}`) },
+      { title: "Faça a soma", cue: `Resultado: ${question.correct}`, speech: `${product} + ${c} = ${question.correct}.`, visual: renderMixedWorkspace(`${a} × ${b} + ${c}`, -1, `${product} + ${c}`, question.correct) }
     ];
   }
 
   if (meta.pattern === "divide_add") {
     const [total, divisor, c, quotient] = values;
     return [
-      { title: "Veja a ordem", speech: "Divisão vem antes da soma. Resolva primeiro a parte destacada.", visual: renderMixedWorkspace(`${total} ÷ ${divisor} + ${c}`, 1) },
-      { title: "Resolva a divisão", speech: `${total} ÷ ${divisor} = ${quotient}. Coloque esse resultado no lugar da divisão.`, visual: renderMixedWorkspace(`${total} ÷ ${divisor} + ${c}`, 1, `${quotient} + ${c}`) },
-      { title: "Faça a soma", speech: `${quotient} + ${c} = ${question.correct}.`, visual: renderMixedWorkspace(`${total} ÷ ${divisor} + ${c}`, -1, `${quotient} + ${c}`, question.correct) }
+      { title: "Veja a ordem", cue: "Divisão primeiro", speech: "Divisão vem antes da soma. Resolva primeiro a parte destacada.", visual: renderMixedWorkspace(`${total} ÷ ${divisor} + ${c}`, 1) },
+      { title: "Resolva a divisão", cue: `${total} ÷ ${divisor} = ${quotient}`, speech: `${total} ÷ ${divisor} = ${quotient}. Coloque esse valor no lugar da divisão.`, visual: renderMixedWorkspace(`${total} ÷ ${divisor} + ${c}`, 1, `${quotient} + ${c}`) },
+      { title: "Faça a soma", cue: `Resultado: ${question.correct}`, speech: `${quotient} + ${c} = ${question.correct}.`, visual: renderMixedWorkspace(`${total} ÷ ${divisor} + ${c}`, -1, `${quotient} + ${c}`, question.correct) }
     ];
   }
 
   return [
-    { title: "Resolva por partes", speech: "Observe os sinais. Faça primeiro multiplicações e divisões; depois soma e subtração.", visual: renderMixedWorkspace(question.text, 1) },
-    { title: "Confira a ordem", speech: `Ao terminar cada parte, confira a posição dos números. O resultado final é ${question.correct}.`, visual: renderMixedWorkspace(question.text, -1, "", question.correct) }
+    { title: "Resolva por partes", cue: "Siga a ordem", speech: "Faça primeiro multiplicações e divisões; depois soma e subtração.", visual: renderMixedWorkspace(question.text, 1) },
+    { title: "Confira a ordem", cue: `Resultado: ${question.correct}`, speech: `Ao terminar cada parte, confira a posição dos números. O resultado final é ${question.correct}.`, visual: renderMixedWorkspace(question.text, -1, "", question.correct) }
   ];
 }
 
@@ -973,7 +1139,7 @@ function renderTutor(question) {
     return `
       <button class="tutor-launcher" data-action="toggle-tutor" aria-label="Abrir Robô Professor">
         <span class="launcher-robot">🤖</span>
-        <span><strong>Robô Professor</strong><small>Toque para montar a conta</small></span>
+        <span><strong>Robô Professor</strong><small>Veja a conta sendo montada</small></span>
       </button>
     `;
   }
@@ -985,20 +1151,27 @@ function renderTutor(question) {
   const hasNext = currentIndex < lesson.length - 1;
 
   return `
-    <aside class="floating-tutor" aria-live="polite">
+    <aside class="floating-tutor ${state.tutorAutoPlay ? "is-playing" : "is-paused"}" aria-live="polite">
       <div class="floating-tutor-head">
-        <div class="floating-robot" aria-hidden="true">
-          <span class="mascot-head"></span><span class="mascot-body"></span><span class="mascot-arm left"></span><span class="mascot-arm right"></span>
-        </div>
         <div><strong>Robô Professor</strong><span>Etapa ${currentIndex + 1} de ${lesson.length}</span></div>
         <button class="tutor-close" data-action="toggle-tutor" aria-label="Fechar ajuda">×</button>
+      </div>
+      <div class="robot-teaching-stage">
+        <div class="floating-robot teaching-robot" aria-hidden="true">
+          <span class="mascot-head"></span><span class="mascot-body"></span><span class="mascot-arm left"></span><span class="mascot-arm right pointing-arm"></span><span class="robot-hand">☝️</span>
+        </div>
+        <div class="robot-live-cloud"><small>Agora faça isto:</small><strong>${escapeHtml(current.cue || current.title)}</strong></div>
       </div>
       <div class="tutor-speech">
         <b>${escapeHtml(current.title)}</b>
         <p>${current.speech}</p>
       </div>
-      <div class="tutor-workspace">${current.visual}</div>
+      <div class="tutor-workspace step-${currentIndex}">${current.visual}</div>
       <div class="tutor-progress" aria-hidden="true">${lesson.map((_, index) => `<span class="${index <= currentIndex ? "done" : ""}"></span>`).join("")}</div>
+      <div class="tutor-play-row">
+        <button class="tutor-play-btn ${state.tutorAutoPlay ? "active" : ""}" data-action="toggle-tutor-autoplay">${state.tutorAutoPlay ? "⏸ Pausar animação" : "▶ Reproduzir sozinho"}</button>
+        <button class="tutor-restart-btn" data-action="restart-tutor">↺ Recomeçar</button>
+      </div>
       <div class="tutor-actions floating-actions">
         <button class="btn btn-light" data-action="previous-tutor-step" ${hasPrevious ? "" : "disabled"}>Voltar</button>
         ${hasNext
@@ -1252,73 +1425,266 @@ function getStudentCorrectAnswers(student) {
   return getStudentAnswers(student).filter((answer) => answer.isCorrect === true);
 }
 
+function operationLabel(operation) {
+  const labels = { add: "Soma", subtract: "Subtração", multiply: "Multiplicação", divide: "Divisão", mixed: "Misto", unknown: "Outros" };
+  return labels[operation] || labels.unknown;
+}
+
+function operationEmoji(operation) {
+  const labels = { add: "+", subtract: "−", multiply: "×", divide: "÷", mixed: "★", unknown: "?" };
+  return labels[operation] || labels.unknown;
+}
+
+function getAllTeacherAnswers(students) {
+  return students.flatMap((student) => getStudentAnswers(student).map((answer) => ({ ...answer, student })))
+    .sort((a, b) => String(b.answeredAt || b.attempt?.date || "").localeCompare(String(a.answeredAt || a.attempt?.date || "")));
+}
+
+function getDetailedTotals(records) {
+  const correct = records.filter((item) => item.isCorrect === true).length;
+  const wrong = records.filter((item) => item.isCorrect === false).length;
+  return { total: records.length, correct, wrong, accuracy: records.length ? Math.round((correct / records.length) * 100) : 0 };
+}
+
+function renderAccuracyDonut(correct, wrong, title = "Aproveitamento") {
+  const total = correct + wrong;
+  const accuracy = total ? Math.round((correct / total) * 100) : 0;
+  return `
+    <div class="accuracy-donut-card">
+      <div class="accuracy-donut" style="--accuracy:${accuracy}"><div><strong>${accuracy}%</strong><span>de acerto</span></div></div>
+      <div><h4>${escapeHtml(title)}</h4><p><b class="correct-value">${correct} acertos</b> e <b class="wrong-value">${wrong} erros</b></p></div>
+    </div>
+  `;
+}
+
+function renderTeacherTabs() {
+  const tabs = [
+    ["overview", "Visão geral", "⌂"],
+    ["responses", "Respostas dos alunos", "☑"],
+    ["analytics", "Análises e gráficos", "▥"]
+  ];
+  if (state.role === "admin") tabs.push(["teachers", "Professores", "♟"]);
+  return `<nav class="teacher-tabs">${tabs.map(([id, label, icon]) => `<button class="teacher-tab ${state.teacherTab === id ? "active" : ""}" data-action="set-teacher-tab" data-tab="${id}"><span>${icon}</span>${label}</button>`).join("")}</nav>`;
+}
+
+function renderRecentAnswerCard(item) {
+  const correct = item.isCorrect === true;
+  return `
+    <article class="recent-answer ${correct ? "correct" : "wrong"}">
+      <span class="recent-answer-icon">${correct ? "✓" : "×"}</span>
+      <div><strong>${escapeHtml(item.student?.fullName || "Aluno")}</strong><small>${formatDateTime(item.answeredAt || item.attempt?.date)}</small></div>
+      <b>${escapeHtml(item.questionText || "Conta")}</b>
+      <span>${item.selectedAnswer} ${correct ? "=" : "≠"} ${item.correctAnswer}</span>
+    </article>
+  `;
+}
+
+function renderTeacherOverview(students, totals, allDetailed, totalCorrect, totalWrong, totalAttempts, totalFinished, bestStudent) {
+  const recent = allDetailed.slice(0, 6);
+  return `
+    <section class="stats-grid teacher-stats">
+      <div class="stat-card"><strong>${students.length}</strong><span>Alunos</span></div>
+      <div class="stat-card"><strong>${totalCorrect}</strong><span>Acertos totais</span></div>
+      <div class="stat-card"><strong>${totalWrong}</strong><span>Erros totais</span></div>
+      <div class="stat-card"><strong>${totalAttempts}</strong><span>Tentativas</span></div>
+      <div class="stat-card"><strong>${totalFinished}</strong><span>Fases concluídas</span></div>
+      <div class="stat-card"><strong>${bestStudent ? escapeHtml(bestStudent.student.fullName.split(" ")[0]) : "-"}</strong><span>Maior destaque</span></div>
+    </section>
+    <section class="teacher-overview-grid">
+      <div class="card overview-chart-panel">
+        <h3>Resultado geral</h3>
+        ${renderAccuracyDonut(totalCorrect, totalWrong, "Desempenho acumulado")}
+        <button class="btn btn-light full-button" data-action="set-teacher-tab" data-tab="analytics">Abrir análises completas</button>
+      </div>
+      <div class="card recent-activity-panel">
+        <div class="section-title compact"><div><h3>Atividade recente</h3><p>Últimas respostas registradas.</p></div><button class="text-button" data-action="set-teacher-tab" data-tab="responses">Ver todas</button></div>
+        <div class="recent-answer-list">${recent.length ? recent.map(renderRecentAnswerCard).join("") : `<div class="empty">Ainda não existem respostas detalhadas.</div>`}</div>
+      </div>
+    </section>
+    <section class="card student-directory-card">
+      <div class="section-title compact"><div><h3>Alunos</h3><p>Abra o histórico individual de cada aluno.</p></div></div>
+      <div class="student-directory-grid">
+        ${totals.length ? totals.map(({ student, stats }) => {
+          const detailed = getStudentAnswers(student);
+          const detailTotals = getDetailedTotals(detailed);
+          return `<article class="student-summary-card">
+            <div class="student-avatar">${escapeHtml((student.fullName || "A").charAt(0).toUpperCase())}</div>
+            <div class="student-summary-main"><strong>${escapeHtml(student.fullName)}</strong><span>${stats.correct} acertos • ${stats.wrong} erros</span><div class="student-mini-progress"><b style="width:${detailTotals.accuracy}%"></b></div><small>${detailed.length ? `${detailTotals.accuracy}% nas respostas detalhadas` : "Aguardando novas respostas"}</small></div>
+            <button class="btn btn-light" data-action="view-student-performance" data-student="${escapeHtml(student.id)}">Abrir respostas</button>
+          </article>`;
+        }).join("") : `<div class="empty">Nenhum aluno jogou ainda.</div>`}
+      </div>
+    </section>
+  `;
+}
+
+function teacherFilteredAnswers(records) {
+  const search = String(state.teacherSearch || "").trim().toLowerCase();
+  return records.filter((item) => {
+    const operation = item.operation || item.attempt?.operation || getWorld(item.attempt?.worldId)?.operation || "unknown";
+    const difficulty = item.attempt?.difficulty || "";
+    if (state.teacherAnswerFilter === "correct" && item.isCorrect !== true) return false;
+    if (state.teacherAnswerFilter === "wrong" && item.isCorrect !== false) return false;
+    if (state.teacherOperationFilter !== "all" && operation !== state.teacherOperationFilter) return false;
+    if (state.teacherDifficultyFilter !== "all" && difficulty !== state.teacherDifficultyFilter) return false;
+    if (state.teacherStudentFilter !== "all" && item.student?.id !== state.teacherStudentFilter) return false;
+    if (search) {
+      const haystack = `${item.student?.fullName || ""} ${item.questionText || ""} ${item.selectedAnswer ?? ""} ${item.correctAnswer ?? ""}`.toLowerCase();
+      if (!haystack.includes(search)) return false;
+    }
+    return true;
+  });
+}
+
+function renderResponseFilters(students, records) {
+  const totals = getDetailedTotals(records);
+  return `
+    <section class="card response-filter-card">
+      <div class="section-title compact"><div><h3>Filtrar respostas</h3><p>Encontre rapidamente um aluno, operação ou tipo de resultado.</p></div></div>
+      <div class="response-filter-grid">
+        <label>Aluno<select data-teacher-filter="student"><option value="all">Todos os alunos</option>${students.map((student) => `<option value="${escapeHtml(student.id)}" ${state.teacherStudentFilter === student.id ? "selected" : ""}>${escapeHtml(student.fullName)}</option>`).join("")}</select></label>
+        <label>Operação<select data-teacher-filter="operation"><option value="all">Todas</option>${["add", "subtract", "multiply", "divide", "mixed"].map((op) => `<option value="${op}" ${state.teacherOperationFilter === op ? "selected" : ""}>${operationLabel(op)}</option>`).join("")}</select></label>
+        <label>Dificuldade<select data-teacher-filter="difficulty"><option value="all">Todas</option>${Object.entries(difficulties).map(([id, item]) => `<option value="${id}" ${state.teacherDifficultyFilter === id ? "selected" : ""}>${item.label}</option>`).join("")}</select></label>
+        <label>Pesquisar<input data-teacher-search type="search" value="${escapeHtml(state.teacherSearch)}" placeholder="Nome ou conta" /></label>
+      </div>
+      <div class="answer-filter-row response-status-filters">
+        <button class="answer-filter ${state.teacherAnswerFilter === "all" ? "active" : ""}" data-action="set-answer-filter" data-filter="all">Todas (${totals.total})</button>
+        <button class="answer-filter correct ${state.teacherAnswerFilter === "correct" ? "active" : ""}" data-action="set-answer-filter" data-filter="correct">Acertos (${totals.correct})</button>
+        <button class="answer-filter wrong ${state.teacherAnswerFilter === "wrong" ? "active" : ""}" data-action="set-answer-filter" data-filter="wrong">Erros (${totals.wrong})</button>
+      </div>
+    </section>
+  `;
+}
+
+function renderAnswerRecords(records, limit = 250) {
+  return `<div class="answer-detail-list global-answer-list">${records.slice(0, limit).map((item) => {
+    const correct = item.isCorrect === true;
+    const operation = item.operation || getWorld(item.attempt?.worldId)?.operation || "unknown";
+    return `
+      <article class="answer-detail-item ${correct ? "is-correct" : "is-wrong"}">
+        <div class="answer-status-icon">${correct ? "✓" : "×"}</div>
+        <div class="answer-detail-main">
+          <div class="error-item-head"><strong>${escapeHtml(item.student?.fullName || "Aluno")}</strong><span>${formatDateTime(item.answeredAt || item.attempt?.date)}</span></div>
+          <div class="answer-context-row"><span>${operationEmoji(operation)} ${operationLabel(operation)}</span><span>Fase ${item.attempt?.level || "-"}</span><span>${difficulties[item.attempt?.difficulty]?.label || "-"}</span></div>
+          <div class="error-equation">${escapeHtml(item.questionText || "Conta não registrada")}</div>
+          <div class="answer-comparison">
+            <span>Resposta do aluno <b class="${correct ? "correct-value" : "wrong-value"}">${item.selectedAnswer}</b></span>
+            <span>Resposta correta <b class="correct-value">${item.correctAnswer}</b></span>
+            <span class="answer-result-label ${correct ? "correct" : "wrong"}">${correct ? "Acertou" : "Errou"}</span>
+          </div>
+          <div class="tutor-usage-note">${item.tutorUsedBeforeAnswer ? `Usou ${item.tutorStepViewed || 1} etapa(s) do Robô Professor antes de responder.` : item.tutorOpenedAfterError ? "O Robô Professor foi aberto depois do erro." : "Não usou o Robô Professor nesta conta."}</div>
+        </div>
+      </article>`;
+  }).join("")}</div>`;
+}
+
 function renderStudentPerformanceDetails(student) {
   if (!student) return "";
-  const allAnswers = getStudentAnswers(student);
-  const correctAnswers = allAnswers.filter((item) => item.isCorrect === true);
-  const wrongAnswers = allAnswers.filter((item) => item.isCorrect === false);
-  const stats = getStats(student.progress);
+  const allAnswers = getStudentAnswers(student).map((item) => ({ ...item, student }));
+  const totals = getDetailedTotals(allAnswers);
   const filter = state.teacherAnswerFilter || "all";
-  const filteredAnswers = filter === "correct" ? correctAnswers : filter === "wrong" ? wrongAnswers : allAnswers;
-  const accuracy = allAnswers.length ? Math.round((correctAnswers.length / allAnswers.length) * 100) : 0;
-
+  const filtered = filter === "correct" ? allAnswers.filter((item) => item.isCorrect === true) : filter === "wrong" ? allAnswers.filter((item) => item.isCorrect === false) : allAnswers;
   return `
     <section class="card student-detail-card">
-      <div class="section-title">
-        <div>
-          <h3>Desempenho de ${escapeHtml(student.fullName)}</h3>
-          <p>Veja cada conta, a resposta escolhida e o resultado correto.</p>
-        </div>
-        <button class="btn btn-light" data-action="close-student-details">Voltar à lista</button>
-      </div>
-
+      <div class="section-title"><div><h3>Respostas de ${escapeHtml(student.fullName)}</h3><p>Conta, resposta escolhida, resposta correta e uso do robô.</p></div><button class="btn btn-light" data-action="close-student-details">Voltar para todas</button></div>
       <div class="student-performance-summary">
-        <div class="performance-card all"><strong>${allAnswers.length}</strong><span>Respostas detalhadas</span></div>
-        <div class="performance-card correct"><strong>${correctAnswers.length}</strong><span>Acertos</span></div>
-        <div class="performance-card wrong"><strong>${wrongAnswers.length}</strong><span>Erros</span></div>
-        <div class="performance-card accuracy"><strong>${accuracy}%</strong><span>Aproveitamento</span></div>
+        <div class="performance-card all"><strong>${totals.total}</strong><span>Respostas</span></div>
+        <div class="performance-card correct"><strong>${totals.correct}</strong><span>Acertos</span></div>
+        <div class="performance-card wrong"><strong>${totals.wrong}</strong><span>Erros</span></div>
+        <div class="performance-card accuracy"><strong>${totals.accuracy}%</strong><span>Aproveitamento</span></div>
       </div>
-
       <div class="answer-filter-row">
-        <button class="answer-filter ${filter === "all" ? "active" : ""}" data-action="set-answer-filter" data-filter="all">Todas (${allAnswers.length})</button>
-        <button class="answer-filter correct ${filter === "correct" ? "active" : ""}" data-action="set-answer-filter" data-filter="correct">Acertos (${correctAnswers.length})</button>
-        <button class="answer-filter wrong ${filter === "wrong" ? "active" : ""}" data-action="set-answer-filter" data-filter="wrong">Erros (${wrongAnswers.length})</button>
+        <button class="answer-filter ${filter === "all" ? "active" : ""}" data-action="set-answer-filter" data-filter="all">Todas (${totals.total})</button>
+        <button class="answer-filter correct ${filter === "correct" ? "active" : ""}" data-action="set-answer-filter" data-filter="correct">Acertos (${totals.correct})</button>
+        <button class="answer-filter wrong ${filter === "wrong" ? "active" : ""}" data-action="set-answer-filter" data-filter="wrong">Erros (${totals.wrong})</button>
       </div>
+      ${allAnswers.length ? renderAnswerRecords(filtered, 200) : `<div class="empty">Ainda não existem respostas detalhadas para este aluno. As novas partidas passarão a aparecer aqui questão por questão.</div>`}
+    </section>
+  `;
+}
 
-      ${allAnswers.length ? `
-        <div class="answer-detail-list">
-          ${filteredAnswers.slice(0, 150).map((item) => {
-            const world = getWorld(item.attempt?.worldId);
-            const correct = item.isCorrect === true;
-            return `
-              <article class="answer-detail-item ${correct ? "is-correct" : "is-wrong"}">
-                <div class="answer-status-icon">${correct ? "✓" : "×"}</div>
-                <div class="answer-detail-main">
-                  <div class="error-item-head">
-                    <strong>${world?.emoji || ""} ${world?.name || "Atividade"} • Fase ${item.attempt?.level || "-"} • ${difficulties[item.attempt?.difficulty]?.label || "-"}</strong>
-                    <span>${formatDateTime(item.answeredAt || item.attempt?.date)}</span>
-                  </div>
-                  <div class="error-equation">${escapeHtml(item.questionText || "Conta não registrada")}</div>
-                  <div class="answer-comparison">
-                    <span>Resposta do aluno <b class="${correct ? "correct-value" : "wrong-value"}">${item.selectedAnswer}</b></span>
-                    <span>Resposta correta <b class="correct-value">${item.correctAnswer}</b></span>
-                    <span class="answer-result-label ${correct ? "correct" : "wrong"}">${correct ? "Acertou" : "Errou"}</span>
-                  </div>
-                  <div class="tutor-usage-note">${item.tutorUsedBeforeAnswer
-                    ? `Usou ${item.tutorStepViewed || 1} etapa(s) do Robô Professor antes de responder.`
-                    : item.tutorOpenedAfterError
-                      ? "O Robô Professor foi aberto depois do erro."
-                      : "Não usou o Robô Professor nesta conta."}</div>
-                </div>
-              </article>
-            `;
-          }).join("")}
-        </div>
-      ` : `
-        <div class="empty">
-          Ainda não existem respostas detalhadas para este aluno. As tentativas antigas mostram somente os totais (${stats.correct} acertos e ${stats.wrong} erros). Depois que o aluno concluir uma fase usando esta nova versão, cada conta aparecerá aqui.
-        </div>
-      `}
+function renderTeacherResponses(students, allDetailed) {
+  const selectedStudent = state.teacherSelectedStudentId ? data.students[state.teacherSelectedStudentId] : null;
+  if (selectedStudent) return renderStudentPerformanceDetails(selectedStudent);
+  const filtered = teacherFilteredAnswers(allDetailed);
+  return `
+    ${renderResponseFilters(students, allDetailed)}
+    <section class="card responses-results-card">
+      <div class="section-title compact"><div><h3>${filtered.length} resposta(s) encontrada(s)</h3><p>As respostas mais recentes aparecem primeiro.</p></div></div>
+      ${filtered.length ? renderAnswerRecords(filtered) : `<div class="empty">Nenhuma resposta corresponde aos filtros selecionados.</div>`}
+    </section>
+  `;
+}
+
+function groupAnswerStats(records, keyGetter, allowedKeys = []) {
+  const map = new Map(allowedKeys.map((key) => [key, { key, correct: 0, wrong: 0, total: 0 }]));
+  records.forEach((item) => {
+    const key = keyGetter(item) || "unknown";
+    if (!map.has(key)) map.set(key, { key, correct: 0, wrong: 0, total: 0 });
+    const row = map.get(key);
+    row.total += 1;
+    if (item.isCorrect === true) row.correct += 1;
+    if (item.isCorrect === false) row.wrong += 1;
+  });
+  return [...map.values()];
+}
+
+function renderStackedChart(title, subtitle, rows, labelGetter) {
+  const max = Math.max(...rows.map((row) => row.total), 1);
+  return `
+    <section class="card analytics-chart-card">
+      <div class="section-title compact"><div><h3>${escapeHtml(title)}</h3><p>${escapeHtml(subtitle)}</p></div></div>
+      <div class="stacked-chart-list">${rows.map((row) => {
+        const width = (row.total / max) * 100;
+        const correctPart = row.total ? (row.correct / row.total) * 100 : 0;
+        const wrongPart = row.total ? (row.wrong / row.total) * 100 : 0;
+        return `<div class="stacked-chart-row"><div class="stacked-label"><strong>${escapeHtml(labelGetter(row.key))}</strong><span>${row.total} respostas</span></div><div class="stacked-track" style="width:${Math.max(width, row.total ? 12 : 0)}%"><b class="correct-segment" style="width:${correctPart}%"></b><b class="wrong-segment" style="width:${wrongPart}%"></b></div><div class="stacked-values"><span class="correct-value">${row.correct} ✓</span><span class="wrong-value">${row.wrong} ×</span></div></div>`;
+      }).join("")}</div>
+    </section>
+  `;
+}
+
+function renderTeacherAnalytics(students, allDetailed) {
+  const detailedTotals = getDetailedTotals(allDetailed);
+  const operationRows = groupAnswerStats(allDetailed, (item) => item.operation || getWorld(item.attempt?.worldId)?.operation || "unknown", ["add", "subtract", "multiply", "divide", "mixed"]);
+  const difficultyRows = groupAnswerStats(allDetailed, (item) => item.attempt?.difficulty || "unknown", Object.keys(difficulties));
+  const studentRows = students.map((student) => {
+    const records = getStudentAnswers(student);
+    const totals = getDetailedTotals(records);
+    return { student, ...totals };
+  }).filter((row) => row.total > 0).sort((a, b) => b.accuracy - a.accuracy || b.total - a.total);
+
+  const errorMap = new Map();
+  allDetailed.filter((item) => item.isCorrect === false).forEach((item) => {
+    const key = item.questionText || "Conta não registrada";
+    const current = errorMap.get(key) || { question: key, count: 0, answers: new Map(), correctAnswer: item.correctAnswer };
+    current.count += 1;
+    current.answers.set(String(item.selectedAnswer), (current.answers.get(String(item.selectedAnswer)) || 0) + 1);
+    errorMap.set(key, current);
+  });
+  const commonErrors = [...errorMap.values()].sort((a, b) => b.count - a.count).slice(0, 8);
+
+  if (!allDetailed.length) return `<section class="card"><div class="empty">Os gráficos aparecerão depois que os alunos responderem questões usando a nova versão do jogo.</div></section>`;
+
+  return `
+    <section class="analytics-hero-grid">
+      <div class="card">${renderAccuracyDonut(detailedTotals.correct, detailedTotals.wrong, "Respostas detalhadas")}</div>
+      <div class="card analytics-highlight"><small>Maior atenção necessária</small><strong>${operationLabel(operationRows.slice().sort((a, b) => b.wrong - a.wrong)[0]?.key || "unknown")}</strong><p>Operação com mais erros registrados nas respostas detalhadas.</p></div>
+      <div class="card analytics-highlight success"><small>Melhor aproveitamento</small><strong>${studentRows[0] ? escapeHtml(studentRows[0].student.fullName) : "-"}</strong><p>${studentRows[0] ? `${studentRows[0].accuracy}% de acerto em ${studentRows[0].total} respostas.` : "Sem dados suficientes."}</p></div>
+    </section>
+    <section class="analytics-grid">
+      ${renderStackedChart("Desempenho por operação", "Verde representa acertos e vermelho representa erros.", operationRows, operationLabel)}
+      ${renderStackedChart("Desempenho por dificuldade", "Compare onde a turma encontra mais dificuldade.", difficultyRows, (key) => difficulties[key]?.label || "Outros")}
+    </section>
+    <section class="analytics-grid lower">
+      <section class="card analytics-chart-card">
+        <div class="section-title compact"><div><h3>Comparação entre alunos</h3><p>Ordenado pelo percentual de acertos detalhados.</p></div></div>
+        <div class="student-ranking-chart">${studentRows.slice(0, 12).map((row, index) => `<div class="student-ranking-row"><span class="ranking-position">${index + 1}</span><div><strong>${escapeHtml(row.student.fullName)}</strong><small>${row.correct} acertos em ${row.total}</small><div class="ranking-track"><b style="width:${row.accuracy}%"></b></div></div><em>${row.accuracy}%</em></div>`).join("") || `<div class="empty">Sem respostas detalhadas.</div>`}</div>
+      </section>
+      <section class="card analytics-chart-card">
+        <div class="section-title compact"><div><h3>Contas com mais erros</h3><p>Ajuda o professor a planejar a revisão.</p></div></div>
+        <div class="common-error-list">${commonErrors.length ? commonErrors.map((item, index) => `<article><span>${index + 1}</span><div><strong>${escapeHtml(item.question)}</strong><small>Resposta correta: ${item.correctAnswer}</small></div><b>${item.count} erro(s)</b></article>`).join("") : `<div class="empty">Nenhum erro detalhado registrado.</div>`}</div>
+      </section>
     </section>
   `;
 }
@@ -1331,26 +1697,43 @@ function renderTeacherDashboard() {
   const totalAttempts = totals.reduce((sum, item) => sum + item.stats.attempts, 0);
   const totalFinished = totals.reduce((sum, item) => sum + item.stats.completedLevels, 0);
   const bestStudent = totals.filter((item) => item.stats.attempts > 0).sort((a, b) => b.stats.correct - a.stats.correct)[0];
-  const maxBar = Math.max(totalCorrect, totalWrong, 1);
-  const selectedStudent = state.teacherSelectedStudentId ? data.students[state.teacherSelectedStudentId] : null;
+  const allDetailed = getAllTeacherAnswers(students);
+
+  let tabContent = "";
+  if (state.teacherTab === "responses") tabContent = renderTeacherResponses(students, allDetailed);
+  else if (state.teacherTab === "analytics") tabContent = renderTeacherAnalytics(students, allDetailed);
+  else if (state.teacherTab === "teachers" && state.role === "admin") tabContent = renderAdminTeacherManager();
+  else tabContent = renderTeacherOverview(students, totals, allDetailed, totalCorrect, totalWrong, totalAttempts, totalFinished, bestStudent);
 
   app.innerHTML = `
-    <div class="app-container">
+    <div class="app-container teacher-dashboard-shell">
       ${renderTopBar()}
-      <header class="page-header"><div><h2>${state.role === "admin" ? "Painel admin" : "Painel do professor"}</h2><p>Acompanhe os resultados e veja exatamente quais contas cada aluno acertou ou errou.</p></div><button class="btn btn-light" data-action="reload-dashboard">Atualizar dados</button></header>
-      ${renderAdminTeacherManager()}
-      <section class="stats-grid"><div class="stat-card"><strong>${students.length}</strong><span>Alunos</span></div><div class="stat-card"><strong>${totalCorrect}</strong><span>Acertos totais</span></div><div class="stat-card"><strong>${totalWrong}</strong><span>Erros totais</span></div><div class="stat-card"><strong>${totalAttempts}</strong><span>Tentativas</span></div><div class="stat-card"><strong>${totalFinished}</strong><span>Fases concluídas</span></div><div class="stat-card"><strong>${bestStudent ? escapeHtml(bestStudent.student.fullName.split(" ")[0]) : "-"}</strong><span>Maior destaque</span></div></section>
-      <section class="card chart-card"><h3>Gráfico geral</h3><div class="bar-row"><span>Acertos</span><div><b style="width:${(totalCorrect / maxBar) * 100}%"></b></div><strong>${totalCorrect}</strong></div><div class="bar-row wrong"><span>Erros</span><div><b style="width:${(totalWrong / maxBar) * 100}%"></b></div><strong>${totalWrong}</strong></div></section>
-      ${selectedStudent ? renderStudentPerformanceDetails(selectedStudent) : `
-        <section class="list student-list">
-          ${totals.length ? totals.map(({ student, stats }) => {
-            const detailedAnswers = getStudentAnswers(student).length;
-            return `<div class="list-item student-row"><div><strong>${escapeHtml(student.fullName)}</strong><br /><small>${stats.completedLevels}/${stats.totalLevels} fases • ${stats.correct} acertos • ${stats.wrong} erros • ${detailedAnswers} resposta(s) detalhada(s)</small></div><div class="teacher-actions"><span class="student-score-badges"><b class="correct-value">${stats.correct} ✓</b><b class="wrong-value">${stats.wrong} ×</b></span><button class="btn btn-light" data-action="view-student-performance" data-student="${escapeHtml(student.id)}">Ver acertos e erros</button></div></div>`;
-          }).join("") : `<div class="empty">Nenhum aluno jogou ainda.</div>`}
-        </section>
-      `}
+      <header class="page-header teacher-page-header"><div><h2>${state.role === "admin" ? "Painel administrativo" : "Painel do professor"}</h2><p>Resultados, respostas detalhadas e análises pedagógicas da turma.</p></div><button class="btn btn-light" data-action="reload-dashboard">Atualizar dados</button></header>
+      ${renderTeacherTabs()}
+      <main class="teacher-tab-content">${tabContent}</main>
     </div>
   `;
+}
+
+let tutorAutoTimer = null;
+
+function syncTutorAutoPlay() {
+  clearTimeout(tutorAutoTimer);
+  if (state.screen !== "game" || !state.tutorOpen || !state.tutorAutoPlay) return;
+  const question = state.questions[state.questionIndex];
+  const lesson = buildTutorSteps(question);
+  if (state.tutorStep >= lesson.length - 1) {
+    state.tutorAutoPlay = false;
+    return;
+  }
+  tutorAutoTimer = setTimeout(() => {
+    if (state.screen !== "game" || !state.tutorOpen || !state.tutorAutoPlay) return;
+    state.tutorStep = Math.min(state.tutorStep + 1, lesson.length - 1);
+    state.tutorUsedOnQuestion = true;
+    state.tutorMaxStep = Math.max(state.tutorMaxStep, state.tutorStep);
+    if (state.tutorStep >= lesson.length - 1) state.tutorAutoPlay = false;
+    render();
+  }, 3600);
 }
 
 function render() {
@@ -1362,6 +1745,7 @@ function render() {
   if (state.screen === "result") renderResult();
   if (state.screen === "ranking") renderRanking();
   if (state.screen === "teacher") renderTeacherDashboard();
+  syncTutorAutoPlay();
 }
 
 app.addEventListener("click", (event) => {
@@ -1376,10 +1760,16 @@ app.addEventListener("click", (event) => {
   if (action === "go-ranking") state.screen = "ranking";
   if (action === "teacher-dashboard") {
     state.screen = "teacher";
+    state.teacherTab = "overview";
     state.teacherSelectedStudentId = null;
     state.teacherAnswerFilter = "all";
   }
-  if (action === "logout") state = { ...state, screen: "login", currentUserId: null, role: null, loginMode: "student", loginName: "", loginError: "", adminMessage: "", staffToken: null, staffFullName: "", teacherSelectedStudentId: null, teacherAnswerFilter: "all" };
+  if (action === "set-teacher-tab") {
+    state.teacherTab = element.dataset.tab || "overview";
+    state.teacherSelectedStudentId = null;
+    state.teacherAnswerFilter = "all";
+  }
+  if (action === "logout") state = { ...state, screen: "login", currentUserId: null, role: null, loginMode: "student", loginName: "", loginError: "", adminMessage: "", staffToken: null, staffFullName: "", teacherSelectedStudentId: null, teacherAnswerFilter: "all", teacherTab: "overview", tutorAutoPlay: false };
   if (action === "reload-teachers" || action === "reload-dashboard") {
     loadTeacherDashboardFromSupabase().then(() => render());
     return;
@@ -1397,8 +1787,20 @@ app.addEventListener("click", (event) => {
       state.tutorUsedOnQuestion = true;
       state.tutorStep = Math.max(0, state.tutorStep);
       state.tutorMaxStep = Math.max(state.tutorMaxStep, state.tutorStep);
+      state.tutorAutoPlay = true;
+    } else {
+      state.tutorAutoPlay = false;
     }
     state.tutorOpen = !state.tutorOpen;
+  }
+  if (action === "toggle-tutor-autoplay") {
+    state.tutorAutoPlay = !state.tutorAutoPlay;
+  }
+  if (action === "restart-tutor") {
+    state.tutorStep = 0;
+    state.tutorAutoPlay = true;
+    state.tutorUsedOnQuestion = true;
+    state.tutorMaxStep = Math.max(state.tutorMaxStep, 0);
   }
   if (action === "next-tutor-step") {
     const question = state.questions[state.questionIndex];
@@ -1412,6 +1814,7 @@ app.addEventListener("click", (event) => {
   if (action === "view-student-errors" || action === "view-student-performance") {
     state.teacherSelectedStudentId = element.dataset.student;
     state.teacherAnswerFilter = "all";
+    state.teacherTab = "responses";
     state.screen = "teacher";
   }
   if (action === "set-answer-filter") state.teacherAnswerFilter = element.dataset.filter || "all";
@@ -1530,6 +1933,7 @@ app.addEventListener("submit", async (event) => {
       state.staffToken = staff.token;
       state.role = staff.role;
       state.screen = "teacher";
+      state.teacherTab = "overview";
       state.loginError = "";
       state.adminMessage = "";
       await loadTeacherDashboardFromSupabase();
@@ -1592,6 +1996,15 @@ app.addEventListener("click", async (event) => {
 }, true);
 
 app.addEventListener("change", (event) => {
+  if (event.target.matches("[data-teacher-filter]")) {
+    const filter = event.target.dataset.teacherFilter;
+    if (filter === "student") state.teacherStudentFilter = event.target.value || "all";
+    if (filter === "operation") state.teacherOperationFilter = event.target.value || "all";
+    if (filter === "difficulty") state.teacherDifficultyFilter = event.target.value || "all";
+    render();
+    return;
+  }
+
   if (!event.target.matches("[data-action='toggle-teacher']")) return;
   event.stopImmediatePropagation();
   const form = event.target.closest("[data-form='login']");
@@ -1603,6 +2016,14 @@ app.addEventListener("change", (event) => {
 }, true);
 
 app.addEventListener("input", (event) => {
+  if (event.target.matches("[data-teacher-search]")) {
+    state.teacherSearch = event.target.value;
+    const cursor = event.target.selectionStart;
+    render();
+    const input = app.querySelector("[data-teacher-search]");
+    if (input) { input.focus(); input.setSelectionRange(cursor, cursor); }
+    return;
+  }
   if (!event.target.matches("input[name='fullName']")) return;
   state.loginName = event.target.value;
 }, true);

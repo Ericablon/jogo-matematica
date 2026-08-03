@@ -1,0 +1,6 @@
+Envie para o GitHub somente:
+- app.js
+- estilo.css
+- index.html
+
+Mantenha o supabase-config.js atual. Ele contém a conexão correta do seu projeto Supabase.
