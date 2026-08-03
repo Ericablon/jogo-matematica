@@ -1,18 +1,25 @@
-// Configuração do Supabase
-// Projeto: jogo de matemática
-// Project ID: ctnylpmumkbhuyctehtc
+// Configure este arquivo depois de criar o novo projeto gratuito no Supabase.
+// Copie a Project URL e a chave anon/publishable em:
+// Supabase > Project Settings > API
 
-const SUPABASE_URL = "https://ctnylpmumkbhuyctehtc.supabase.co";
-
-const SUPABASE_ANON_KEY = "sb_publishable_o9-OnYZZXdfiDhkwyCDfIw_W_isidrd";
+const SUPABASE_URL = "COLE_AQUI_A_URL_DO_NOVO_PROJETO";
+const SUPABASE_ANON_KEY = "COLE_AQUI_A_CHAVE_ANON_DO_NOVO_PROJETO";
 
 window.SUPABASE_URL = SUPABASE_URL;
 window.SUPABASE_ANON_KEY = SUPABASE_ANON_KEY;
 
-window.supabaseClient = window.supabase.createClient(
-  SUPABASE_URL,
-  SUPABASE_ANON_KEY
-);
+if (
+  window.supabase &&
+  !SUPABASE_URL.includes("COLE_AQUI") &&
+  !SUPABASE_ANON_KEY.includes("COLE_AQUI")
+) {
+  window.supabaseClient = window.supabase.createClient(
+    SUPABASE_URL,
+    SUPABASE_ANON_KEY
+  );
 
-window.cliente_supabase = window.supabaseClient;
-window.sb = window.supabaseClient;
+  window.cliente_supabase = window.supabaseClient;
+  window.sb = window.supabaseClient;
+} else {
+  console.warn("Supabase ainda não configurado. O jogo usará o armazenamento local deste navegador.");
+}

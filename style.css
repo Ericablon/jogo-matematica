@@ -1128,3 +1128,202 @@ body {
     justify-content: flex-start;
   }
 }
+
+/* Robô tutor e detalhamento pedagógico */
+.tutor-closed {
+  display: grid;
+  gap: 10px;
+  justify-items: center;
+  margin: 18px 0;
+}
+
+.tutor-closed .mascot-card {
+  margin: 0;
+  width: 100%;
+}
+
+.tutor-panel {
+  background: linear-gradient(145deg, rgba(247, 201, 72, 0.14), rgba(29, 111, 255, 0.16));
+  border: 1px solid rgba(247, 201, 72, 0.48);
+  border-radius: 18px;
+  margin: 18px 0;
+  padding: 18px;
+}
+
+.tutor-title {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.tutor-title div:last-child {
+  display: grid;
+  gap: 2px;
+}
+
+.tutor-title span {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.mini-robot {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  display: flex;
+  font-size: 28px;
+  height: 52px;
+  justify-content: center;
+  width: 52px;
+}
+
+.tutor-steps {
+  display: grid;
+  gap: 10px;
+}
+
+.tutor-step {
+  align-items: flex-start;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  display: flex;
+  gap: 12px;
+  line-height: 1.5;
+  padding: 14px;
+}
+
+.tutor-step > b {
+  align-items: center;
+  background: var(--secondary);
+  border-radius: 999px;
+  color: #172033;
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 28px;
+  justify-content: center;
+  width: 28px;
+}
+
+.tutor-column {
+  display: grid;
+  font-family: "Courier New", monospace;
+  font-size: 24px;
+  font-weight: 800;
+  justify-content: end;
+  margin: 14px auto 0;
+  max-width: 160px;
+  text-align: right;
+}
+
+.tutor-column > div:nth-child(2) {
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.tutor-column hr {
+  border: 0;
+  border-top: 2px solid currentColor;
+  margin: 4px 0;
+  width: 100%;
+}
+
+.tutor-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.tutor-done {
+  color: var(--secondary);
+  font-weight: 800;
+  margin-right: auto;
+}
+
+.student-row {
+  align-items: center;
+  gap: 16px;
+}
+
+.student-row .teacher-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.student-detail-card {
+  margin-top: 18px;
+  padding: 20px;
+}
+
+.error-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 14px 0 18px;
+}
+
+.error-list {
+  display: grid;
+  gap: 12px;
+}
+
+.error-item {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border);
+  border-radius: 15px;
+  padding: 15px;
+}
+
+.error-item-head {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.error-item-head span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.error-equation {
+  font-size: 26px;
+  font-weight: 900;
+  margin: 13px 0;
+}
+
+.error-answers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+}
+
+.wrong-value {
+  color: var(--danger);
+}
+
+.correct-value {
+  color: var(--success);
+}
+
+@media (max-width: 680px) {
+  .student-row,
+  .student-row .teacher-actions,
+  .error-item-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .student-row .teacher-actions .btn {
+    width: 100%;
+  }
+}
