@@ -50,7 +50,10 @@ let state = {
   tutorUsedOnQuestion: false,
   tutorMaxStep: -1,
   answerLog: [],
+  currentAttemptId: null,
+  attemptStartedAt: null,
   teacherSelectedStudentId: null,
+  teacherAnswerFilter: "all",
   staffToken: null,
   staffFullName: ""
 };
@@ -131,14 +134,17 @@ function mergeProgress(localProgress = emptyProgress(), cloudProgress = emptyPro
     };
   });
 
-  const seenAttempts = new Set();
-  merged.attempts = merged.attempts
-    .filter((item) => {
-      const key = item.id || `${item.worldId}|${item.level}|${item.difficulty}|${item.correct}|${item.wrong}|${item.score}|${item.date}`;
-      if (seenAttempts.has(key)) return false;
-      seenAttempts.add(key);
-      return true;
-    })
+  const attemptsByKey = new Map();
+  merged.attempts.forEach((item) => {
+    const key = item.id || `${item.worldId}|${item.level}|${item.difficulty}|${item.correct}|${item.wrong}|${item.score}|${item.date}`;
+    const existing = attemptsByKey.get(key);
+    const existingStamp = String(existing?.updatedAt || existing?.date || "");
+    const itemStamp = String(item?.updatedAt || item?.date || "");
+    if (!existing || itemStamp >= existingStamp || (item.answers || []).length >= (existing.answers || []).length) {
+      attemptsByKey.set(key, item);
+    }
+  });
+  merged.attempts = [...attemptsByKey.values()]
     .sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
 
   return merged;
@@ -524,6 +530,8 @@ function getStats(progress = activeProgress()) {
 
 function startLevel(worldId, level) {
   const progress = activeProgress();
+  const attemptId = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+  const attemptStartedAt = new Date().toISOString();
   progress.lastPlayed = { worldId, level, difficulty: state.difficulty };
   saveActiveProgress(progress);
 
@@ -546,9 +554,34 @@ function startLevel(worldId, level) {
     tutorUses: 0,
     tutorUsedOnQuestion: false,
     tutorMaxStep: -1,
-    answerLog: []
+    answerLog: [],
+    currentAttemptId: attemptId,
+    attemptStartedAt
   };
   render();
+}
+
+function upsertCurrentAttempt(progress, status = "in_progress", score = state.score) {
+  if (!progress || !state.currentAttemptId) return;
+  const now = new Date().toISOString();
+  const attempt = {
+    id: state.currentAttemptId,
+    worldId: state.currentWorldId,
+    level: state.currentLevel,
+    difficulty: state.difficulty,
+    correct: state.correct,
+    wrong: state.wrong,
+    score,
+    tutorUses: state.tutorUses,
+    answers: [...state.answerLog],
+    status,
+    date: state.attemptStartedAt || now,
+    updatedAt: now
+  };
+  const attempts = progress.attempts || (progress.attempts = []);
+  const index = attempts.findIndex((item) => item.id === attempt.id);
+  if (index >= 0) attempts[index] = attempt;
+  else attempts.push(attempt);
 }
 
 function answerQuestion(answer) {
@@ -585,6 +618,10 @@ function answerQuestion(answer) {
       state.tutorStep = 0;
     }
   }
+
+  const progress = activeProgress();
+  upsertCurrentAttempt(progress, "in_progress", state.score);
+  saveActiveProgress(progress);
   render();
 }
 
@@ -623,19 +660,7 @@ function finishLevel() {
     updatedAt: new Date().toISOString()
   };
 
-  progress.attempts.push({
-    id: typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`,
-    worldId: state.currentWorldId,
-    level: state.currentLevel,
-    difficulty: state.difficulty,
-    correct: state.correct,
-    wrong: state.wrong,
-    score: finalScore,
-    tutorUses: state.tutorUses,
-    answers: [...state.answerLog],
-    date: new Date().toISOString()
-  });
-
+  upsertCurrentAttempt(progress, "completed", finalScore);
   saveActiveProgress(progress);
   state.score = finalScore;
   state.screen = "result";
@@ -643,7 +668,12 @@ function finishLevel() {
 }
 
 function exitLevel() {
-  if (!confirm("Deseja sair desta fase? Seu progresso desta tentativa não será salvo.")) return;
+  if (!confirm("Deseja sair desta fase? As respostas já feitas ficarão registradas para acompanhamento do professor.")) return;
+  if (state.answerLog.length) {
+    const progress = activeProgress();
+    upsertCurrentAttempt(progress, "abandoned", state.score);
+    saveActiveProgress(progress);
+  }
   state.screen = "levels";
   state.answered = false;
   render();
@@ -673,130 +703,309 @@ function canShowTutor() {
   return ["facil", "media"].includes(state.difficulty);
 }
 
-function tutorColumn(top, bottom, symbol) {
+function tutorDigits(value, width) {
+  return String(Math.max(0, Number(value) || 0)).padStart(width, " ").split("");
+}
+
+function renderTutorDigitRow({ label = "", value = "", width, activeColumn = -1, revealed = null, symbol = "", className = "" }) {
+  const chars = String(value).padStart(width, " ").split("");
   return `
-    <div class="tutor-column" aria-label="Conta montada">
-      <div>${top}</div>
-      <div><span>${symbol}</span>${bottom}</div>
-      <hr />
-      <div>?</div>
+    <div class="tutor-math-row ${className}">
+      <span class="tutor-row-label">${escapeHtml(label)}</span>
+      <span class="tutor-row-symbol">${escapeHtml(symbol)}</span>
+      <span class="tutor-digit-grid" style="--digit-count:${width}">
+        ${chars.map((char, index) => {
+          const visible = !revealed || revealed[index] !== false;
+          const display = visible ? (char === " " ? "" : char) : "";
+          return `<span class="tutor-digit-cell ${index === activeColumn ? "active" : ""} ${display ? "filled" : "empty"}">${display}</span>`;
+        }).join("")}
+      </span>
     </div>
   `;
 }
 
-function buildTutorSteps(question) {
+function renderColumnWorkspace({ top, bottom, symbol, result, activeColumn = -1, revealedResult = [], note = "", carry = "" }) {
+  const width = Math.max(String(top).length, String(bottom).length, String(result).length);
+  const resultChars = tutorDigits(result, width);
+  const revealMap = resultChars.map((char, index) => char === " " || revealedResult.includes(index));
+  return `
+    <div class="tutor-column-workspace">
+      ${carry ? `<div class="tutor-carry-note">${carry}</div>` : ""}
+      ${renderTutorDigitRow({ label: "1º número", value: top, width, activeColumn })}
+      ${renderTutorDigitRow({ label: "2º número", value: bottom, width, activeColumn, symbol })}
+      <div class="tutor-math-line"></div>
+      ${renderTutorDigitRow({ label: "resultado", value: result, width, activeColumn, revealed: revealMap, className: "result-row" })}
+      ${note ? `<div class="tutor-placement-note">${note}</div>` : ""}
+    </div>
+  `;
+}
+
+function buildAdditionLesson(a, b, question) {
+  const width = Math.max(String(a).length, String(b).length, String(question.correct).length);
+  const top = tutorDigits(a, width).map((d) => Number(d || 0));
+  const bottom = tutorDigits(b, width).map((d) => Number(d || 0));
+  const revealed = [];
+  const steps = [{
+    title: "Alinhe os números",
+    speech: "Coloque unidade embaixo de unidade, dezena embaixo de dezena e assim por diante. A conta sempre começa pela coluna da direita.",
+    visual: renderColumnWorkspace({ top: a, bottom: b, symbol: "+", result: question.correct, activeColumn: width - 1, revealedResult: [], note: "A seta amarela mostra a primeira coluna que vamos resolver." })
+  }];
+
+  let carry = 0;
+  for (let col = width - 1; col >= 0; col -= 1) {
+    const previousCarry = carry;
+    const total = top[col] + bottom[col] + previousCarry;
+    const digit = total % 10;
+    carry = Math.floor(total / 10);
+    revealed.push(col);
+    const place = col === width - 1 ? "unidades" : col === width - 2 ? "dezenas" : col === width - 3 ? "centenas" : "próxima casa";
+    const carryText = carry ? `Como ${total} tem dois algarismos, escreva ${digit} embaixo e leve ${carry} para a coluna à esquerda.` : `Escreva ${digit} exatamente embaixo da coluna das ${place}.`;
+    steps.push({
+      title: `Resolva as ${place}`,
+      speech: `${top[col]} + ${bottom[col]}${previousCarry ? ` + ${previousCarry} que veio` : ""} = ${total}. ${carryText}`,
+      visual: renderColumnWorkspace({ top: a, bottom: b, symbol: "+", result: question.correct, activeColumn: col, revealedResult: [...revealed], carry: previousCarry ? `Número que veio da coluna anterior: ${previousCarry}` : "", note: `O ${digit} fica na casa destacada.` })
+    });
+  }
+
+  steps.push({
+    title: "Conta montada",
+    speech: `Pronto! Cada algarismo foi colocado em sua coluna. O resultado é ${question.correct}.`,
+    visual: renderColumnWorkspace({ top: a, bottom: b, symbol: "+", result: question.correct, activeColumn: -1, revealedResult: Array.from({ length: width }, (_, index) => index), note: "Confira da direita para a esquerda antes de marcar a resposta." })
+  });
+  return steps;
+}
+
+function buildSubtractionLesson(a, b, question) {
+  const width = Math.max(String(a).length, String(b).length, String(question.correct).length);
+  const workingTop = tutorDigits(a, width).map((d) => Number(d || 0));
+  const bottom = tutorDigits(b, width).map((d) => Number(d || 0));
+  const revealed = [];
+  const steps = [{
+    title: "Alinhe a subtração",
+    speech: "Coloque unidade embaixo de unidade. O número maior fica em cima e começamos pela coluna da direita.",
+    visual: renderColumnWorkspace({ top: a, bottom: b, symbol: "−", result: question.correct, activeColumn: width - 1, revealedResult: [], note: "Comece na coluna destacada." })
+  }];
+
+  for (let col = width - 1; col >= 0; col -= 1) {
+    let upper = workingTop[col];
+    const lower = bottom[col];
+    let borrowMessage = "";
+    if (upper < lower) {
+      let lender = col - 1;
+      while (lender >= 0 && workingTop[lender] === 0) lender -= 1;
+      if (lender >= 0) {
+        workingTop[lender] -= 1;
+        for (let i = lender + 1; i < col; i += 1) workingTop[i] = 9;
+        workingTop[col] += 10;
+        upper = workingTop[col];
+        borrowMessage = `Como ${upper - 10} é menor que ${lower}, pegue 1 emprestado da coluna à esquerda. Agora temos ${upper}.`;
+      }
+    }
+    const digit = upper - lower;
+    revealed.push(col);
+    const place = col === width - 1 ? "unidades" : col === width - 2 ? "dezenas" : col === width - 3 ? "centenas" : "próxima casa";
+    steps.push({
+      title: `Subtraia as ${place}`,
+      speech: `${borrowMessage} ${upper} − ${lower} = ${digit}. Escreva ${digit} embaixo dessa coluna.`,
+      visual: renderColumnWorkspace({ top: a, bottom: b, symbol: "−", result: question.correct, activeColumn: col, revealedResult: [...revealed], carry: borrowMessage ? "Empréstimo feito da coluna à esquerda" : "", note: `O ${digit} fica na casa destacada.` })
+    });
+  }
+
+  steps.push({
+    title: "Conta montada",
+    speech: `Terminamos da direita para a esquerda. O resultado é ${question.correct}.`,
+    visual: renderColumnWorkspace({ top: a, bottom: b, symbol: "−", result: question.correct, activeColumn: -1, revealedResult: Array.from({ length: width }, (_, index) => index), note: "Agora confira se cada algarismo está na coluna certa." })
+  });
+  return steps;
+}
+
+function renderMultiplicationWorkspace(a, b, partials = [], activeRow = -1, showResult = false, result = "") {
+  const width = Math.max(String(result || a * b).length, String(a).length, String(b).length) + 1;
+  return `
+    <div class="tutor-column-workspace multiplication-workspace">
+      ${renderTutorDigitRow({ label: "multiplicando", value: a, width })}
+      ${renderTutorDigitRow({ label: "multiplicador", value: b, width, symbol: "×" })}
+      <div class="tutor-math-line"></div>
+      ${partials.map((partial, index) => renderTutorDigitRow({ label: `parcial ${index + 1}`, value: partial, width, activeColumn: index === activeRow ? width - 1 - index : -1, className: index === activeRow ? "active-row" : "" })).join("")}
+      ${showResult ? `<div class="tutor-math-line secondary-line"></div>${renderTutorDigitRow({ label: "resultado", value: result, width, className: "result-row" })}` : ""}
+      <div class="tutor-placement-note">Cada nova linha parcial começa uma casa mais à esquerda.</div>
+    </div>
+  `;
+}
+
+function buildMultiplicationLesson(a, b, question) {
+  const multiplierDigits = String(b).split("").reverse().map(Number);
+  const partials = [];
+  const steps = [{
+    title: "Monte a multiplicação",
+    speech: "Alinhe os números pela direita. O sinal de multiplicação fica ao lado do número de baixo.",
+    visual: renderMultiplicationWorkspace(a, b, [], -1, false, question.correct)
+  }];
+
+  multiplierDigits.forEach((digit, index) => {
+    const partial = a * digit * (10 ** index);
+    partials.push(partial);
+    steps.push({
+      title: `Faça a ${index + 1}ª linha`,
+      speech: `Multiplique ${a} por ${digit}. ${index > 0 ? `Como esse ${digit} está na casa das ${index === 1 ? "dezenas" : "centenas"}, a linha começa ${index} casa(s) para a esquerda.` : "A primeira linha começa na casa das unidades."}`,
+      visual: renderMultiplicationWorkspace(a, b, [...partials], index, false, question.correct)
+    });
+  });
+
+  steps.push({
+    title: "Some as linhas parciais",
+    speech: `Agora some as linhas mantendo cada algarismo em sua coluna. O resultado é ${question.correct}.`,
+    visual: renderMultiplicationWorkspace(a, b, partials, -1, true, question.correct)
+  });
+  return steps;
+}
+
+function renderDivisionWorkspace(total, divisor, quotientSlots, activeIndex = -1, note = "") {
+  const digits = String(total).split("");
+  return `
+    <div class="division-workspace">
+      <div class="division-quotient" style="--digit-count:${digits.length}">
+        ${digits.map((_, index) => `<span class="tutor-digit-cell ${index === activeIndex ? "active" : ""} ${quotientSlots[index] !== "" ? "filled" : "empty"}">${quotientSlots[index] ?? ""}</span>`).join("")}
+      </div>
+      <div class="division-body">
+        <div class="division-divisor">${divisor}</div>
+        <div class="division-dividend" style="--digit-count:${digits.length}">
+          ${digits.map((digit, index) => `<span class="tutor-digit-cell ${index === activeIndex ? "active" : ""}">${digit}</span>`).join("")}
+        </div>
+      </div>
+      <div class="tutor-placement-note">${note || "O resultado é escrito em cima do algarismo que está sendo usado."}</div>
+    </div>
+  `;
+}
+
+function buildDivisionLesson(total, divisor, question) {
+  const digits = String(total).split("").map(Number);
+  const quotientSlots = Array(digits.length).fill("");
+  const steps = [{
+    title: "Monte a divisão",
+    speech: `O ${divisor} fica do lado de fora e o ${total} fica dentro. O resultado será escrito em cima, coluna por coluna.`,
+    visual: renderDivisionWorkspace(total, divisor, quotientSlots, 0)
+  }];
+
+  let current = 0;
+  let quotientStarted = false;
+  digits.forEach((digit, index) => {
+    current = current * 10 + digit;
+    if (current < divisor && index < digits.length - 1 && !quotientStarted) {
+      steps.push({
+        title: "Junte o próximo algarismo",
+        speech: `${current} é menor que ${divisor}, então ainda não dá para dividir. Junte o próximo algarismo à direita.`,
+        visual: renderDivisionWorkspace(total, divisor, [...quotientSlots], index, `Ainda não escrevemos nada em cima desta coluna.`)
+      });
+      return;
+    }
+    const quotientDigit = Math.floor(current / divisor);
+    const remainder = current % divisor;
+    quotientSlots[index] = String(quotientDigit);
+    quotientStarted = true;
+    steps.push({
+      title: `Escreva ${quotientDigit} em cima`,
+      speech: `${divisor} cabe ${quotientDigit} vez(es) em ${current}, porque ${divisor} × ${quotientDigit} = ${divisor * quotientDigit}. Escreva ${quotientDigit} em cima desta coluna. Sobra ${remainder}.`,
+      visual: renderDivisionWorkspace(total, divisor, [...quotientSlots], index, `O ${quotientDigit} fica exatamente em cima do algarismo destacado.`)
+    });
+    current = remainder;
+  });
+
+  steps.push({
+    title: "Divisão concluída",
+    speech: `Lendo os números escritos em cima, encontramos ${question.correct}. Como a divisão é exata, a sobra final é zero.`,
+    visual: renderDivisionWorkspace(total, divisor, quotientSlots, -1, `Resultado final: ${question.correct}`)
+  });
+  return steps;
+}
+
+function renderMixedWorkspace(expression, activePart, replacement = "", result = "") {
+  return `
+    <div class="mixed-workspace">
+      <div class="mixed-expression">${expression.split(" ").map((part, index) => `<span class="${index === activePart ? "active" : ""}">${escapeHtml(part)}</span>`).join(" ")}</div>
+      ${replacement ? `<div class="mixed-arrow">↓</div><div class="mixed-replacement">${replacement}</div>` : ""}
+      ${result ? `<div class="mixed-result">Resultado: <strong>${result}</strong></div>` : ""}
+    </div>
+  `;
+}
+
+function buildTutorLesson(question) {
   const meta = question?.meta || {};
   const values = meta.operands || [];
-
-  if (meta.operation === "add") {
-    const [a, b] = values;
-    return [
-      `Vamos montar a soma colocando unidade embaixo de unidade.${tutorColumn(a, b, "+")}`,
-      `Comece pela direita: some os algarismos das unidades. Quando passar de 9, escreva a unidade e leve 1 para a próxima casa.`,
-      state.answered
-        ? `Agora some as dezenas e as outras casas. O resultado final é <strong>${question.correct}</strong>.`
-        : `Agora some as dezenas e as outras casas. Depois procure esse resultado entre as alternativas.`
-    ];
-  }
-
-  if (meta.operation === "subtract") {
-    const [a, b] = values;
-    return [
-      `Monte a subtração alinhando os números pela direita.${tutorColumn(a, b, "−")}`,
-      `Comece pelas unidades. Quando o número de cima for menor, peça 1 emprestado para a casa ao lado.`,
-      state.answered
-        ? `Faça cada coluna da direita para a esquerda. O resultado final é <strong>${question.correct}</strong>.`
-        : `Faça cada coluna da direita para a esquerda e compare o resultado com as alternativas.`
-    ];
-  }
-
-  if (meta.operation === "multiply") {
-    const [a, b] = values;
-    const smaller = Math.min(a, b);
-    const larger = Math.max(a, b);
-    return [
-      `Multiplicar é repetir uma soma: <strong>${larger}</strong> aparece <strong>${smaller}</strong> vez(es).`,
-      `${Array.from({ length: Math.min(smaller, 8) }, () => larger).join(" + ")}${smaller > 8 ? " + ..." : ""}`,
-      state.answered
-        ? `Somando os grupos, chegamos a <strong>${question.correct}</strong>.`
-        : `Agora termine a soma dos grupos e escolha a alternativa correspondente.`
-    ];
-  }
-
-  if (meta.operation === "divide") {
-    const [total, divisor] = values;
-    return [
-      `Dividir é repartir <strong>${total}</strong> em <strong>${divisor}</strong> grupos iguais.`,
-      `Pergunte: qual número multiplicado por ${divisor} forma ${total}?`,
-      state.answered
-        ? `<strong>${divisor} × ${question.correct} = ${total}</strong>. Portanto, cada grupo recebe <strong>${question.correct}</strong>.`
-        : `Complete mentalmente: <strong>${divisor} × ? = ${total}</strong>. O número que ocupa o lugar de ? é a resposta.`
-    ];
-  }
+  if (meta.operation === "add") return buildAdditionLesson(values[0], values[1], question);
+  if (meta.operation === "subtract") return buildSubtractionLesson(values[0], values[1], question);
+  if (meta.operation === "multiply") return buildMultiplicationLesson(values[0], values[1], question);
+  if (meta.operation === "divide") return buildDivisionLesson(values[0], values[1], question);
 
   if (meta.pattern === "multiply_add") {
     const [a, b, c] = values;
+    const product = a * b;
     return [
-      `Primeiro resolvemos a multiplicação: <strong>${a} × ${b} = ${a * b}</strong>.`,
-      `Depois usamos o resultado na soma: <strong>${a * b} + ${c}</strong>.`,
-      state.answered
-        ? `A resposta é <strong>${question.correct}</strong>. Multiplicação vem antes da soma.`
-        : `Agora some <strong>${a * b} + ${c}</strong> e escolha o resultado. Multiplicação vem antes da soma.`
+      { title: "Veja a ordem", speech: "Multiplicação vem antes da soma. Vamos resolver primeiro a parte destacada.", visual: renderMixedWorkspace(`${a} × ${b} + ${c}`, 1) },
+      { title: "Resolva a multiplicação", speech: `${a} × ${b} = ${product}. Substitua a multiplicação por esse resultado.`, visual: renderMixedWorkspace(`${a} × ${b} + ${c}`, 1, `${product} + ${c}`) },
+      { title: "Faça a soma", speech: `${product} + ${c} = ${question.correct}.`, visual: renderMixedWorkspace(`${a} × ${b} + ${c}`, -1, `${product} + ${c}`, question.correct) }
     ];
   }
 
   if (meta.pattern === "divide_add") {
     const [total, divisor, c, quotient] = values;
     return [
-      `Primeiro resolvemos a divisão: <strong>${total} ÷ ${divisor} = ${quotient}</strong>.`,
-      `Depois somamos: <strong>${quotient} + ${c}</strong>.`,
-      state.answered
-        ? `A resposta é <strong>${question.correct}</strong>. Divisão vem antes da soma.`
-        : `Agora some <strong>${quotient} + ${c}</strong> e escolha o resultado. Divisão vem antes da soma.`
+      { title: "Veja a ordem", speech: "Divisão vem antes da soma. Resolva primeiro a parte destacada.", visual: renderMixedWorkspace(`${total} ÷ ${divisor} + ${c}`, 1) },
+      { title: "Resolva a divisão", speech: `${total} ÷ ${divisor} = ${quotient}. Coloque esse resultado no lugar da divisão.`, visual: renderMixedWorkspace(`${total} ÷ ${divisor} + ${c}`, 1, `${quotient} + ${c}`) },
+      { title: "Faça a soma", speech: `${quotient} + ${c} = ${question.correct}.`, visual: renderMixedWorkspace(`${total} ÷ ${divisor} + ${c}`, -1, `${quotient} + ${c}`, question.correct) }
     ];
   }
 
   return [
-    "Observe os sinais e resolva uma operação por vez.",
-    "Multiplicação e divisão vêm antes de soma e subtração.",
-    state.answered
-      ? `Conferindo cada etapa, o resultado é <strong>${question.correct}</strong>.`
-      : `Resolva cada etapa e só depois compare com as alternativas.`
+    { title: "Resolva por partes", speech: "Observe os sinais. Faça primeiro multiplicações e divisões; depois soma e subtração.", visual: renderMixedWorkspace(question.text, 1) },
+    { title: "Confira a ordem", speech: `Ao terminar cada parte, confira a posição dos números. O resultado final é ${question.correct}.`, visual: renderMixedWorkspace(question.text, -1, "", question.correct) }
   ];
 }
 
+function buildTutorSteps(question) {
+  return buildTutorLesson(question);
+}
+
 function renderTutor(question) {
-  if (!canShowTutor()) {
-    return mascot("Nas dificuldades difícil e super difícil, tente resolver sozinho e use o feedback para conferir.");
-  }
+  if (!canShowTutor()) return "";
 
   if (!state.tutorOpen) {
     return `
-      <div class="tutor-closed">
-        ${mascot("Travou? Eu posso montar essa conta com você, passo a passo.")}
-        <button class="btn btn-secondary" data-action="toggle-tutor">Ajuda do robô</button>
-      </div>
+      <button class="tutor-launcher" data-action="toggle-tutor" aria-label="Abrir Robô Professor">
+        <span class="launcher-robot">🤖</span>
+        <span><strong>Robô Professor</strong><small>Toque para montar a conta</small></span>
+      </button>
     `;
   }
 
-  const steps = buildTutorSteps(question);
-  const visibleSteps = steps.slice(0, Math.min(state.tutorStep + 1, steps.length));
-  const hasNext = state.tutorStep < steps.length - 1;
+  const lesson = buildTutorLesson(question);
+  const currentIndex = Math.min(state.tutorStep, lesson.length - 1);
+  const current = lesson[currentIndex];
+  const hasPrevious = currentIndex > 0;
+  const hasNext = currentIndex < lesson.length - 1;
 
   return `
-    <section class="tutor-panel">
-      <div class="tutor-title">
-        <div class="mini-robot">🤖</div>
-        <div><strong>Robô Professor</strong><span>Vamos resolver juntos</span></div>
+    <aside class="floating-tutor" aria-live="polite">
+      <div class="floating-tutor-head">
+        <div class="floating-robot" aria-hidden="true">
+          <span class="mascot-head"></span><span class="mascot-body"></span><span class="mascot-arm left"></span><span class="mascot-arm right"></span>
+        </div>
+        <div><strong>Robô Professor</strong><span>Etapa ${currentIndex + 1} de ${lesson.length}</span></div>
+        <button class="tutor-close" data-action="toggle-tutor" aria-label="Fechar ajuda">×</button>
       </div>
-      <div class="tutor-steps">
-        ${visibleSteps.map((step, index) => `<div class="tutor-step"><b>${index + 1}</b><div>${step}</div></div>`).join("")}
+      <div class="tutor-speech">
+        <b>${escapeHtml(current.title)}</b>
+        <p>${current.speech}</p>
       </div>
-      <div class="tutor-actions">
-        ${hasNext ? `<button class="btn btn-secondary" data-action="next-tutor-step">Próxima dica</button>` : `<span class="tutor-done">Agora tente escolher a resposta!</span>`}
-        <button class="btn btn-light" data-action="toggle-tutor">Fechar ajuda</button>
+      <div class="tutor-workspace">${current.visual}</div>
+      <div class="tutor-progress" aria-hidden="true">${lesson.map((_, index) => `<span class="${index <= currentIndex ? "done" : ""}"></span>`).join("")}</div>
+      <div class="tutor-actions floating-actions">
+        <button class="btn btn-light" data-action="previous-tutor-step" ${hasPrevious ? "" : "disabled"}>Voltar</button>
+        ${hasNext
+          ? `<button class="btn btn-secondary" data-action="next-tutor-step">Próxima etapa</button>`
+          : `<button class="btn btn-primary" data-action="toggle-tutor">Entendi!</button>`}
       </div>
-    </section>
+    </aside>
   `;
 }
 
@@ -1029,60 +1238,87 @@ function formatDateTime(value) {
   }
 }
 
-function getStudentWrongAnswers(student) {
+function getStudentAnswers(student) {
   return (student?.progress?.attempts || []).flatMap((attempt) =>
-    (attempt.answers || [])
-      .filter((answer) => answer.isCorrect === false)
-      .map((answer) => ({ ...answer, attempt }))
+    (attempt.answers || []).map((answer) => ({ ...answer, attempt }))
   ).sort((a, b) => String(b.answeredAt || b.attempt?.date || "").localeCompare(String(a.answeredAt || a.attempt?.date || "")));
 }
 
-function renderStudentErrorDetails(student) {
+function getStudentWrongAnswers(student) {
+  return getStudentAnswers(student).filter((answer) => answer.isCorrect === false);
+}
+
+function getStudentCorrectAnswers(student) {
+  return getStudentAnswers(student).filter((answer) => answer.isCorrect === true);
+}
+
+function renderStudentPerformanceDetails(student) {
   if (!student) return "";
-  const wrongAnswers = getStudentWrongAnswers(student);
+  const allAnswers = getStudentAnswers(student);
+  const correctAnswers = allAnswers.filter((item) => item.isCorrect === true);
+  const wrongAnswers = allAnswers.filter((item) => item.isCorrect === false);
   const stats = getStats(student.progress);
-  const byWorld = worlds.map((world) => {
-    const amount = wrongAnswers.filter((item) => item.attempt?.worldId === world.id).length;
-    return { world, amount };
-  }).filter((item) => item.amount > 0).sort((a, b) => b.amount - a.amount);
+  const filter = state.teacherAnswerFilter || "all";
+  const filteredAnswers = filter === "correct" ? correctAnswers : filter === "wrong" ? wrongAnswers : allAnswers;
+  const accuracy = allAnswers.length ? Math.round((correctAnswers.length / allAnswers.length) * 100) : 0;
 
   return `
     <section class="card student-detail-card">
       <div class="section-title">
         <div>
-          <h3>Erros de ${escapeHtml(student.fullName)}</h3>
-          <p>${stats.correct} acertos, ${stats.wrong} erros e ${stats.attempts} tentativas registradas.</p>
+          <h3>Desempenho de ${escapeHtml(student.fullName)}</h3>
+          <p>Veja cada conta, a resposta escolhida e o resultado correto.</p>
         </div>
         <button class="btn btn-light" data-action="close-student-details">Voltar à lista</button>
       </div>
-      ${wrongAnswers.length ? `
-        <div class="error-summary">
-          ${byWorld.map(({ world, amount }) => `<span class="status-pill inactive">${world.emoji} ${world.name}: ${amount}</span>`).join("")}
-        </div>
-        <div class="error-list">
-          ${wrongAnswers.slice(0, 100).map((item) => {
+
+      <div class="student-performance-summary">
+        <div class="performance-card all"><strong>${allAnswers.length}</strong><span>Respostas detalhadas</span></div>
+        <div class="performance-card correct"><strong>${correctAnswers.length}</strong><span>Acertos</span></div>
+        <div class="performance-card wrong"><strong>${wrongAnswers.length}</strong><span>Erros</span></div>
+        <div class="performance-card accuracy"><strong>${accuracy}%</strong><span>Aproveitamento</span></div>
+      </div>
+
+      <div class="answer-filter-row">
+        <button class="answer-filter ${filter === "all" ? "active" : ""}" data-action="set-answer-filter" data-filter="all">Todas (${allAnswers.length})</button>
+        <button class="answer-filter correct ${filter === "correct" ? "active" : ""}" data-action="set-answer-filter" data-filter="correct">Acertos (${correctAnswers.length})</button>
+        <button class="answer-filter wrong ${filter === "wrong" ? "active" : ""}" data-action="set-answer-filter" data-filter="wrong">Erros (${wrongAnswers.length})</button>
+      </div>
+
+      ${allAnswers.length ? `
+        <div class="answer-detail-list">
+          ${filteredAnswers.slice(0, 150).map((item) => {
             const world = getWorld(item.attempt?.worldId);
+            const correct = item.isCorrect === true;
             return `
-              <article class="error-item">
-                <div class="error-item-head">
-                  <strong>${world?.emoji || ""} ${world?.name || "Atividade"} • Fase ${item.attempt?.level || "-"}</strong>
-                  <span>${formatDateTime(item.answeredAt || item.attempt?.date)}</span>
-                </div>
-                <div class="error-equation">${escapeHtml(item.questionText || "Conta não registrada")}</div>
-                <div class="error-answers">
-                  <span>Aluno marcou: <b class="wrong-value">${item.selectedAnswer}</b></span>
-                  <span>Resposta correta: <b class="correct-value">${item.correctAnswer}</b></span>
-                  <span>${item.tutorUsedBeforeAnswer
-                    ? `Usou ${item.tutorStepViewed || 1} dica(s) antes de responder`
+              <article class="answer-detail-item ${correct ? "is-correct" : "is-wrong"}">
+                <div class="answer-status-icon">${correct ? "✓" : "×"}</div>
+                <div class="answer-detail-main">
+                  <div class="error-item-head">
+                    <strong>${world?.emoji || ""} ${world?.name || "Atividade"} • Fase ${item.attempt?.level || "-"} • ${difficulties[item.attempt?.difficulty]?.label || "-"}</strong>
+                    <span>${formatDateTime(item.answeredAt || item.attempt?.date)}</span>
+                  </div>
+                  <div class="error-equation">${escapeHtml(item.questionText || "Conta não registrada")}</div>
+                  <div class="answer-comparison">
+                    <span>Resposta do aluno <b class="${correct ? "correct-value" : "wrong-value"}">${item.selectedAnswer}</b></span>
+                    <span>Resposta correta <b class="correct-value">${item.correctAnswer}</b></span>
+                    <span class="answer-result-label ${correct ? "correct" : "wrong"}">${correct ? "Acertou" : "Errou"}</span>
+                  </div>
+                  <div class="tutor-usage-note">${item.tutorUsedBeforeAnswer
+                    ? `Usou ${item.tutorStepViewed || 1} etapa(s) do Robô Professor antes de responder.`
                     : item.tutorOpenedAfterError
-                      ? "O robô explicou depois do erro"
-                      : "Não usou a ajuda do robô"}</span>
+                      ? "O Robô Professor foi aberto depois do erro."
+                      : "Não usou o Robô Professor nesta conta."}</div>
                 </div>
               </article>
             `;
           }).join("")}
         </div>
-      ` : `<div class="empty">Ainda não há erros detalhados. Tentativas antigas mostram apenas os totais; as novas passarão a registrar cada conta.</div>`}
+      ` : `
+        <div class="empty">
+          Ainda não existem respostas detalhadas para este aluno. As tentativas antigas mostram somente os totais (${stats.correct} acertos e ${stats.wrong} erros). Depois que o aluno concluir uma fase usando esta nova versão, cada conta aparecerá aqui.
+        </div>
+      `}
     </section>
   `;
 }
@@ -1101,15 +1337,15 @@ function renderTeacherDashboard() {
   app.innerHTML = `
     <div class="app-container">
       ${renderTopBar()}
-      <header class="page-header"><div><h2>${state.role === "admin" ? "Painel admin" : "Painel do professor"}</h2><p>Acompanhe os resultados e veja exatamente quais contas cada aluno errou.</p></div><button class="btn btn-light" data-action="reload-dashboard">Atualizar dados</button></header>
+      <header class="page-header"><div><h2>${state.role === "admin" ? "Painel admin" : "Painel do professor"}</h2><p>Acompanhe os resultados e veja exatamente quais contas cada aluno acertou ou errou.</p></div><button class="btn btn-light" data-action="reload-dashboard">Atualizar dados</button></header>
       ${renderAdminTeacherManager()}
       <section class="stats-grid"><div class="stat-card"><strong>${students.length}</strong><span>Alunos</span></div><div class="stat-card"><strong>${totalCorrect}</strong><span>Acertos totais</span></div><div class="stat-card"><strong>${totalWrong}</strong><span>Erros totais</span></div><div class="stat-card"><strong>${totalAttempts}</strong><span>Tentativas</span></div><div class="stat-card"><strong>${totalFinished}</strong><span>Fases concluídas</span></div><div class="stat-card"><strong>${bestStudent ? escapeHtml(bestStudent.student.fullName.split(" ")[0]) : "-"}</strong><span>Maior destaque</span></div></section>
       <section class="card chart-card"><h3>Gráfico geral</h3><div class="bar-row"><span>Acertos</span><div><b style="width:${(totalCorrect / maxBar) * 100}%"></b></div><strong>${totalCorrect}</strong></div><div class="bar-row wrong"><span>Erros</span><div><b style="width:${(totalWrong / maxBar) * 100}%"></b></div><strong>${totalWrong}</strong></div></section>
-      ${selectedStudent ? renderStudentErrorDetails(selectedStudent) : `
+      ${selectedStudent ? renderStudentPerformanceDetails(selectedStudent) : `
         <section class="list student-list">
           ${totals.length ? totals.map(({ student, stats }) => {
-            const detailedErrors = getStudentWrongAnswers(student).length;
-            return `<div class="list-item student-row"><div><strong>${escapeHtml(student.fullName)}</strong><br /><small>${stats.completedLevels}/${stats.totalLevels} fases • média ${stats.averageCorrect} acertos e ${stats.averageWrong} erros • ${detailedErrors} erro(s) detalhado(s)</small></div><div class="teacher-actions"><strong>${stats.correct} acertos</strong><button class="btn btn-light" data-action="view-student-errors" data-student="${escapeHtml(student.id)}">Ver onde errou</button></div></div>`;
+            const detailedAnswers = getStudentAnswers(student).length;
+            return `<div class="list-item student-row"><div><strong>${escapeHtml(student.fullName)}</strong><br /><small>${stats.completedLevels}/${stats.totalLevels} fases • ${stats.correct} acertos • ${stats.wrong} erros • ${detailedAnswers} resposta(s) detalhada(s)</small></div><div class="teacher-actions"><span class="student-score-badges"><b class="correct-value">${stats.correct} ✓</b><b class="wrong-value">${stats.wrong} ×</b></span><button class="btn btn-light" data-action="view-student-performance" data-student="${escapeHtml(student.id)}">Ver acertos e erros</button></div></div>`;
           }).join("") : `<div class="empty">Nenhum aluno jogou ainda.</div>`}
         </section>
       `}
@@ -1141,8 +1377,9 @@ app.addEventListener("click", (event) => {
   if (action === "teacher-dashboard") {
     state.screen = "teacher";
     state.teacherSelectedStudentId = null;
+    state.teacherAnswerFilter = "all";
   }
-  if (action === "logout") state = { ...state, screen: "login", currentUserId: null, role: null, loginMode: "student", loginName: "", loginError: "", adminMessage: "", staffToken: null, staffFullName: "", teacherSelectedStudentId: null };
+  if (action === "logout") state = { ...state, screen: "login", currentUserId: null, role: null, loginMode: "student", loginName: "", loginError: "", adminMessage: "", staffToken: null, staffFullName: "", teacherSelectedStudentId: null, teacherAnswerFilter: "all" };
   if (action === "reload-teachers" || action === "reload-dashboard") {
     loadTeacherDashboardFromSupabase().then(() => render());
     return;
@@ -1169,11 +1406,19 @@ app.addEventListener("click", (event) => {
     state.tutorUsedOnQuestion = true;
     state.tutorMaxStep = Math.max(state.tutorMaxStep, state.tutorStep);
   }
-  if (action === "view-student-errors") {
+  if (action === "previous-tutor-step") {
+    state.tutorStep = Math.max(0, state.tutorStep - 1);
+  }
+  if (action === "view-student-errors" || action === "view-student-performance") {
     state.teacherSelectedStudentId = element.dataset.student;
+    state.teacherAnswerFilter = "all";
     state.screen = "teacher";
   }
-  if (action === "close-student-details") state.teacherSelectedStudentId = null;
+  if (action === "set-answer-filter") state.teacherAnswerFilter = element.dataset.filter || "all";
+  if (action === "close-student-details") {
+    state.teacherSelectedStudentId = null;
+    state.teacherAnswerFilter = "all";
+  }
   if (action === "next-question") nextQuestion();
   if (action === "retry-level") startLevel(state.currentWorldId, state.currentLevel);
   if (action === "next-level") startLevel(state.currentWorldId, Math.min(LEVELS_PER_WORLD, state.currentLevel + 1));
